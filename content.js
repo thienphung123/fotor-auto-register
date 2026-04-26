@@ -16,6 +16,63 @@ if (hostname.includes('imail.edu.vn')) {
     }
 }
 
+// === CAPTCHA DETECTOR (Fail-Fast) ===
+// Phát hiện reCAPTCHA HIỂN THỊ THẬT / lỗi IP block -> PAUSE auto + alert qua Telegram + Desktop.
+// User remote vào đổi IP Surfshark thủ công, rồi bấm "Tiếp tục" trong popup.
+// LƯU Ý: Fotor signup luôn preload iframe reCAPTCHA v3 vô hình ngay từ đầu (chưa có challenge),
+// nên KHÔNG được fire chỉ vì iframe tồn tại -> phải check kích thước/visibility thật.
+if (hostname.includes('fotor.com')) {
+    let captchaFired = false;
+    const pageLoadAt = Date.now();
+    const GRACE_MS = 5000; // Bỏ qua 5s đầu để Fotor render xong
+
+    const isElVisible = (el) => {
+        if (!el) return false;
+        const cs = window.getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 50 && r.height > 30;
+    };
+
+    const captchaWatchdog = setInterval(() => {
+        if (captchaFired) return;
+        if (Date.now() - pageLoadAt < GRACE_MS) return;
+
+        try {
+            // 1) iframe reCAPTCHA chỉ tính khi hiển thị thật (v2 anchor / bframe popup),
+            //    bỏ iframe v3 invisible.
+            const candidateIframes = Array.from(document.querySelectorAll(
+                'iframe[src*="recaptcha"], iframe[title*="recaptcha" i], iframe[title*="reCAPTCHA" i]'
+            ));
+            const visibleRecaptcha = candidateIframes.find(f => {
+                const src = f.src || '';
+                const isAnchor = src.includes('/anchor');
+                const isBframe = src.includes('/bframe');
+                if (!isAnchor && !isBframe) return false;
+                return isElVisible(f);
+            });
+
+            // 2) Element báo lỗi IP block / chặn IP rõ ràng (regex chặt)
+            const bodyText = (document.body && document.body.innerText) || '';
+            const hasIpError = /unusual traffic from your (?:computer|network)|your ip (?:address )?(?:has been )?(?:blocked|banned)|too many requests from your ip|chặn ip của bạn|ip của bạn đã bị chặn/i
+                .test(bodyText);
+
+            if (visibleRecaptcha || hasIpError) {
+                captchaFired = true;
+                window.isFotorPaused = true; // dừng vòng auto reg ở handleFotorLogic
+                clearInterval(captchaWatchdog);
+
+                const reason = visibleRecaptcha ? 'reCAPTCHA visible' : 'IP blocked';
+                try { updatePanelStatus(`� Phát hiện Captcha (${reason})! Đã PAUSE - đợi đổi IP thủ công.`); } catch (e) {}
+
+                chrome.runtime.sendMessage({ action: 'CAPTCHA_DETECTED', reason: reason });
+            }
+        } catch (e) {
+            // im lặng
+        }
+    }, 2000);
+}
+
 // Bác sĩ giám sát: Tự động bỏ qua nếu trang Fotor bị kẹt ở màn hình Cloudflare hoặc Load trắng
 if (hostname.includes('fotor.com')) {
     let fotorStuckAttempts = 0;
@@ -455,10 +512,11 @@ function handleFotorLogic(db) {
           window.retryCount = (window.retryCount || 0) + 1;
           
           if (window.retryCount > 6) {
-              // Bị giam kẹt quá 6 lần (~30s) -> Xoay IP
+              // Bị giam kẹt quá 6 lần (~30s) -> coi như Captcha/IP block, PAUSE để user xử tay
               clearInterval(interval);
-              updatePanelStatus('Bị Fotor block cứng. Bắt đầu tải Proxy mới xoay IP...');
-              chrome.runtime.sendMessage({ action: 'rotateVPN' });
+              window.isFotorPaused = true;
+              updatePanelStatus('🛑 Bị Fotor block cứng (Rate limit)! PAUSE - cần đổi IP thủ công.');
+              chrome.runtime.sendMessage({ action: 'CAPTCHA_DETECTED', reason: 'Rate limit / Try again' });
               return;
           }
 
@@ -641,9 +699,17 @@ function handleFotorLogic(db) {
       const verifyInterval = setInterval(() => {
          verifyAttempts++;
          
-         // Kiểm tra màn hình thành công (Fotor hiển thị Try Now hoặc Great job)
+         // Kiểm tra màn hình thành công.
+         // Fotor có nhiều dạng UI sau OTP: "Try Now" / "Great job" / "Earned 10 credits"
+         // / hoặc đơn giản là user đã được login -> hiện profile menu có "Sign out".
+         // Check "sign out" (ko dấu cách lẫn có dấu cách) trong body = đã login thành công.
          const bodyText = document.body.innerText.toLowerCase();
-         const isSuccess = bodyText.includes('great job') || bodyText.includes('earned 10 credits') || bodyText.includes('ready to try your first edit') || Array.from(document.querySelectorAll('button')).some(b => b.innerText.toLowerCase().includes('try now'));
+         const hasSignOut = bodyText.includes('sign out') || bodyText.includes('signout') || bodyText.includes('log out') || bodyText.includes('logout') || bodyText.includes('đăng xuất');
+         const isSuccess = hasSignOut
+                        || bodyText.includes('great job')
+                        || bodyText.includes('earned 10 credits')
+                        || bodyText.includes('ready to try your first edit')
+                        || Array.from(document.querySelectorAll('button')).some(b => b.innerText.toLowerCase().includes('try now'));
          
          if (isSuccess) {
              clearInterval(verifyInterval);

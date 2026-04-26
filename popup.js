@@ -49,6 +49,79 @@ document.addEventListener('DOMContentLoaded', () => {
   chrome.storage.local.get(['emailProvider'], (data) => {
     if (data.emailProvider) document.getElementById('emailProvider').value = data.emailProvider;
   });
+
+  // === Resume sau Captcha ===
+  document.getElementById('resumeBtn').addEventListener('click', () => {
+    chrome.runtime.sendMessage({ action: 'resumeAfterCaptcha' });
+    document.getElementById('status').innerText = 'Đang tiếp tục...';
+    setTimeout(updateUI, 800);
+  });
+
+  // === Telegram config ===
+  // Restore
+  chrome.storage.local.get(['telegramConfig'], (data) => {
+    const cfg = data.telegramConfig || {};
+    document.getElementById('tgBotToken').value = cfg.botToken || '';
+    document.getElementById('tgChatId').value = cfg.chatId || '';
+    document.getElementById('tgEnabled').checked = !!cfg.enabled;
+    if (cfg.enabled && cfg.botToken && cfg.chatId) {
+      document.getElementById('tgStatus').innerText = '✅ Đang bật';
+      document.getElementById('tgStatus').style.color = '#27ae60';
+    }
+  });
+
+  document.getElementById('tgSaveBtn').addEventListener('click', () => {
+    const cfg = {
+      botToken: document.getElementById('tgBotToken').value.trim(),
+      chatId: document.getElementById('tgChatId').value.trim(),
+      enabled: document.getElementById('tgEnabled').checked
+    };
+    chrome.storage.local.set({ telegramConfig: cfg }, () => {
+      const tgStatus = document.getElementById('tgStatus');
+      if (cfg.enabled && (!cfg.botToken || !cfg.chatId)) {
+        tgStatus.innerText = '⚠️ Đã bật nhưng thiếu token/chatId!';
+        tgStatus.style.color = '#e67e22';
+      } else {
+        tgStatus.innerText = '💾 Đã lưu lúc ' + new Date().toLocaleTimeString('vi-VN');
+        tgStatus.style.color = '#27ae60';
+      }
+    });
+  });
+
+  document.getElementById('tgTestBtn').addEventListener('click', async () => {
+    const tgStatus = document.getElementById('tgStatus');
+    tgStatus.innerText = '⏳ Đang gửi test...';
+    tgStatus.style.color = '#666';
+    const botToken = document.getElementById('tgBotToken').value.trim();
+    const chatId = document.getElementById('tgChatId').value.trim();
+    if (!botToken || !chatId) {
+      tgStatus.innerText = '❌ Cần điền Bot Token và Chat ID trước!';
+      tgStatus.style.color = '#e74c3c';
+      return;
+    }
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: '🧪 Test từ Fotor Auto Register\n⏰ ' + new Date().toLocaleString('vi-VN'),
+          parse_mode: 'HTML'
+        })
+      });
+      const json = await res.json();
+      if (json.ok) {
+        tgStatus.innerText = '✅ Đã gửi! Kiểm tra Telegram của bạn.';
+        tgStatus.style.color = '#27ae60';
+      } else {
+        tgStatus.innerText = '❌ Lỗi: ' + (json.description || 'Unknown');
+        tgStatus.style.color = '#e74c3c';
+      }
+    } catch (e) {
+      tgStatus.innerText = '❌ Network error: ' + e.message;
+      tgStatus.style.color = '#e74c3c';
+    }
+  });
 });
 
 function autoSave(list) {
@@ -82,8 +155,9 @@ function autoSave(list) {
 }
 
 function updateUI() {
-  chrome.storage.local.get(['isRunning', 'currentCount', 'targetCount', 'successList', 
-                            'flowState', 'referralUsage', 'refLinkQueue', 'usedRefLinks', 'targetUrl'], (res) => {
+  chrome.storage.local.get(['isRunning', 'currentCount', 'targetCount', 'successList',
+                            'flowState', 'referralUsage', 'refLinkQueue', 'usedRefLinks', 'targetUrl',
+                            'pauseReason'], (res) => {
     const usage    = res.referralUsage || 0;
     const queueLen = (res.refLinkQueue || []).length;
     const used     = res.usedRefLinks  || [];
@@ -102,20 +176,34 @@ function updateUI() {
       usageEl.innerHTML = html;
     }
 
+    const startBtn  = document.getElementById('startBtn');
+    const stopBtn   = document.getElementById('stopBtn');
+    const resumeBtn = document.getElementById('resumeBtn');
+    const statusEl  = document.getElementById('status');
+
     if (res.isRunning) {
-      document.getElementById('startBtn').style.display = 'none';
-      document.getElementById('stopBtn').style.display  = 'block';
+      startBtn.style.display  = 'none';
+      stopBtn.style.display   = 'block';
+      resumeBtn.style.display = 'none';
       let stateMsg = res.flowState || '';
       if (res.flowState === 'START_IMAIL' || res.flowState === 'WAIT_EMAIL')    stateMsg = 'Đang lấy Email (iMail)...';
       if (res.flowState === 'GO_FOTOR'   || res.flowState === 'WAIT_FOTOR_FORM') stateMsg = 'Đang điền Fotor Form...';
       if (res.flowState === 'WAIT_IMAIL_CODE')                                   stateMsg = 'Đang chờ mã xác minh từ Email...';
       if (res.flowState === 'WAIT_FOTOR_CODE')                                   stateMsg = 'Đang nhập mã vào Fotor...';
       if (res.flowState === 'GET_REWARDS_LINK')                                  stateMsg = 'Đang lấy link Ref...';
-      document.getElementById('status').innerText = `Đang chạy (${res.currentCount || 0}/${res.targetCount}) - ${stateMsg}`;
+      statusEl.innerText = `Đang chạy (${res.currentCount || 0}/${res.targetCount}) - ${stateMsg}`;
+      statusEl.style.color = '#555';
+    } else if (res.pauseReason === 'captcha') {
+      startBtn.style.display  = 'none';
+      stopBtn.style.display   = 'block';
+      resumeBtn.style.display = 'block';
+      statusEl.innerHTML = `🛑 <b style="color:#e74c3c">PAUSE - Captcha!</b><br>Đổi IP Surfshark xong → bấm "Tiếp tục"<br>(${res.currentCount || 0}/${res.targetCount})`;
     } else {
-      document.getElementById('startBtn').style.display = 'block';
-      document.getElementById('stopBtn').style.display  = 'none';
-      document.getElementById('status').innerText = 'Đã dừng.';
+      startBtn.style.display  = 'block';
+      stopBtn.style.display   = 'none';
+      resumeBtn.style.display = 'none';
+      statusEl.innerText = 'Đã dừng.';
+      statusEl.style.color = '#555';
     }
     
     // Đồng bộ link ref đang chạy vào input (nếu không đang gõ)

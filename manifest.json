@@ -10,14 +10,14 @@
     "browsingData",
     "downloads",
     "webNavigation",
-    "debugger",
-    "management",
-    "proxy"
+    "alarms",
+    "notifications"
   ],
   "host_permissions": [
     "*://*.fotor.com/*",
     "*://*.imail.edu.vn/*",
-    "*://*.temp-mailo.org/*"
+    "*://*.temp-mailo.org/*",
+    "https://api.telegram.org/*"
   ],
   "action": {
     "default_popup": "popup.html",

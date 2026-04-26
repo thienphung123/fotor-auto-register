@@ -31,11 +31,29 @@
   <input type="text" id="targetUrl" value="https://www.fotor.com/events/get-credits/?referrerCode=" placeholder="https://www.fotor.com/...">
   
   <button id="startBtn">Bắt đầu Đăng ký</button>
+  <button id="resumeBtn" style="display:none; background-color:#27ae60;">▶️ Tiếp tục (đã đổi IP)</button>
   <button id="stopBtn">Dừng lại</button>
 
   <div id="refUsageInfo" style="font-size:11px; color:#e67e22; margin:6px 0; min-height:14px;"></div>
   <div id="status">Đang chờ...</div>
-  
+
+  <details style="margin-top:10px; border:1px solid #ddd; border-radius:4px; padding:8px; background:#fff;">
+    <summary style="cursor:pointer; font-weight:bold; font-size:12px; color:#0088cc;">⚙️ Cấu hình Telegram Bot (lưu acc + cảnh báo Captcha)</summary>
+    <div style="margin-top:8px;">
+      <label style="font-size:11px;">Bot Token (từ @BotFather):</label>
+      <input type="text" id="tgBotToken" placeholder="123456:ABC-DEF..." style="width:100%; padding:6px; margin-bottom:6px; border:1px solid #ccc; border-radius:4px; box-sizing:border-box; font-size:11px;">
+      <label style="font-size:11px;">Chat ID (từ @userinfobot):</label>
+      <input type="text" id="tgChatId" placeholder="123456789" style="width:100%; padding:6px; margin-bottom:6px; border:1px solid #ccc; border-radius:4px; box-sizing:border-box; font-size:11px;">
+      <label style="font-size:11px;">
+        <input type="checkbox" id="tgEnabled" style="vertical-align:middle;">
+        Bật gửi Telegram (alert + lưu acc)
+      </label>
+      <button id="tgSaveBtn" style="margin-top:6px; padding:6px; background-color:#0088cc; font-size:12px;">💾 Lưu cấu hình</button>
+      <button id="tgTestBtn" style="margin-top:4px; padding:6px; background-color:#7f8c8d; font-size:12px;">📤 Gửi tin nhắn test</button>
+      <div id="tgStatus" style="margin-top:6px; font-size:11px; color:#666;"></div>
+    </div>
+  </details>
+
   <label for="successList" style="margin-top: 10px;">Danh sách tài khoản thành công:</label>
   <textarea id="successList" readonly placeholder="Trống"></textarea>
   <button id="downloadBtn" style="margin-top:10px; padding: 6px; width: 100%; border-radius: 4px; border: 1px solid #1a73e8; background: #e8f0fe; color: #1a73e8; cursor: pointer; font-weight: bold;">⬇️ Xuất File TXT Tài Khoản</button>

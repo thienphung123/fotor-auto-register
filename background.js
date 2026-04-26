@@ -1,3 +1,99 @@
+// === TELEGRAM BOT (Alert + Storage) ===
+// Người dùng cấu hình bot token + chat id qua popup. Lưu vào chrome.storage.local
+// dưới key 'telegramConfig' = { botToken, chatId, enabled }.
+async function getTelegramConfig() {
+    const db = await chrome.storage.local.get(['telegramConfig']);
+    return db.telegramConfig || { botToken: '', chatId: '', enabled: false };
+}
+
+// Định dạng datetime VN: 2024-04-27 02:15:33
+function nowVN() {
+    const d = new Date();
+    // toLocaleString với Asia/Ho_Chi_Minh timezone
+    const vn = new Date(d.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${vn.getFullYear()}-${pad(vn.getMonth()+1)}-${pad(vn.getDate())} ${pad(vn.getHours())}:${pad(vn.getMinutes())}:${pad(vn.getSeconds())}`;
+}
+
+// Gửi 1 FILE txt qua Telegram Bot API (sendDocument).
+// Dùng cho batch 20 acc / batch 50 acc -> gọn 1 file thay vì spam tin nhắn.
+async function sendTelegramDocument(filename, content, caption = '', opts = {}) {
+    const cfg = await getTelegramConfig();
+    if (!cfg.enabled || !cfg.botToken || !cfg.chatId) {
+        console.log('[Telegram] Chưa cấu hình bot, bỏ qua gửi file.');
+        return false;
+    }
+    try {
+        const form = new FormData();
+        form.append('chat_id', cfg.chatId);
+        form.append('document', new Blob([content], { type: 'text/plain;charset=utf-8' }), filename);
+        if (caption) form.append('caption', caption);
+        form.append('parse_mode', 'HTML');
+        form.append('disable_notification', String(opts.silent === true));
+
+        const res = await fetch(`https://api.telegram.org/bot${cfg.botToken}/sendDocument`, {
+            method: 'POST',
+            body: form
+        });
+        const json = await res.json();
+        if (!json.ok) {
+            console.log('[Telegram] sendDocument error:', json);
+            return false;
+        }
+        return true;
+    } catch (e) {
+        console.log('[Telegram] sendDocument fetch error:', e);
+        return false;
+    }
+}
+
+// opts.silent = true -> message không kêu chuông/rung điện thoại (mute)
+// Theo yêu cầu user: chỉ Captcha mới báo (loud), tin nhắn acc/milestone đều silent.
+async function sendTelegram(text, opts = {}) {
+    const cfg = await getTelegramConfig();
+    if (!cfg.enabled || !cfg.botToken || !cfg.chatId) {
+        console.log('[Telegram] Chưa cấu hình bot, bỏ qua gửi.');
+        return false;
+    }
+    try {
+        const url = `https://api.telegram.org/bot${cfg.botToken}/sendMessage`;
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                chat_id: cfg.chatId,
+                text: text,
+                parse_mode: opts.parseMode || 'HTML',
+                disable_web_page_preview: true,
+                disable_notification: opts.silent === true
+            })
+        });
+        const json = await res.json();
+        if (!json.ok) {
+            console.log('[Telegram] API error:', json);
+            return false;
+        }
+        return true;
+    } catch (e) {
+        console.log('[Telegram] fetch error:', e);
+        return false;
+    }
+}
+
+// === DESKTOP NOTIFICATION (cảnh báo trực tiếp khi đang ngồi máy) ===
+function notifyDesktop(title, message) {
+    try {
+        chrome.notifications.create({
+            type: 'basic',
+            iconUrl: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiBmaWxsPSIjZTc0YzNjIi8+PHRleHQgeD0iMzIiIHk9IjQyIiBmb250LXNpemU9IjMwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSJ3aGl0ZSI+ITwvdGV4dD48L3N2Zz4=',
+            title: title || 'Fotor Auto Register',
+            message: message || '',
+            priority: 2,
+            requireInteraction: true
+        });
+    } catch (e) { console.log('[Notify] error:', e); }
+}
+
 function generatePassword(length = 12) {
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
   let pass = "";
@@ -8,35 +104,31 @@ function generatePassword(length = 12) {
   return pass;
 }
 
-// === GLOBAL WATCHDOG ===
-let globalWatchdog = null;
-const GLOBAL_TIMEOUT_MS = 120000; // 2 phút
+// === GLOBAL WATCHDOG (dùng chrome.alarms để bền với MV3 SW restart) ===
+// setTimeout sẽ MẤT khi service worker ngủ (MV3 SW chỉ sống ~30s khi không có event).
+// chrome.alarms persist qua SW lifecycle -> tab kẹt sẽ được skip đúng giờ.
+const WATCHDOG_ALARM = 'globalWatchdog';
+const GLOBAL_TIMEOUT_MIN = 2; // 2 phút
 
 function resetWatchdog() {
-  if (globalWatchdog) clearTimeout(globalWatchdog);
-  globalWatchdog = setTimeout(() => {
-    console.log('[WATCHDOG] Quá 2 phút chưa xong! Tự động Skip lượt này...');
-    skipIteration();
-  }, GLOBAL_TIMEOUT_MS);
+    chrome.alarms.create(WATCHDOG_ALARM, { delayInMinutes: GLOBAL_TIMEOUT_MIN });
 }
 
 function stopWatchdog() {
-  if (globalWatchdog) clearTimeout(globalWatchdog);
-  globalWatchdog = null;
+    chrome.alarms.clear(WATCHDOG_ALARM);
 }
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === WATCHDOG_ALARM) {
+        console.log('[WATCHDOG] Quá 2 phút chưa xong! Tự động Skip lượt này...');
+        skipIteration();
+    }
+});
 
 // === BADGE STATUS ===
 function setBadge(text, color) {
   chrome.action.setBadgeText({ text: String(text || '') });
   chrome.action.setBadgeBackgroundColor({ color: color || '#e67e22' });
-}
-
-// KHẨN CẤP: Dọn dẹp tàn dư Proxy chết ngay khi Extension khởi động
-// Tránh việc trình duyệt bị treo ở màn hình ERR_PROXY_CONNECTION_FAILED mãi mãi
-if (chrome.proxy && chrome.proxy.settings) {
-    chrome.proxy.settings.clear({ scope: 'regular' }, () => {
-        console.log('[Sơ cứu] Đã ép tắt sạch mọi thiết lập Proxy bị lỗi dính lại.');
-    });
 }
 
 // Bơm mã đè đè qua MAIN world để lách CSP của Fotor
@@ -66,17 +158,60 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.set({ flowState: 'GET_REWARDS_LINK' }, () => {
       chrome.tabs.update(sender.tab.id, { url: 'https://www.fotor.com/rewards/' });
     });
-  } else if (message.action === 'rotateVPN') {
-    // Người dùng nhận thấy Proxy dính Captcha Robot -> Xóa sạch Proxy và Reset web
-    chrome.proxy.settings.clear({ scope: 'regular' }, () => {
-        console.log('[Proxy] Đã tắt proxy hoàn toàn theo yêu cầu. Load lại web...');
-        skipIteration(); // Bỏ qua lượt lỗi này và load lại chu trình mới bằng mạng thật
-    });
   } else if (message.action === 'skipCurrent') {
     console.log('[Skip] Nhận lệnh skip từ content script...');
     skipIteration();
+  } else if (message.action === 'CAPTCHA_DETECTED') {
+    handleCaptchaDetected(sender && sender.tab && sender.tab.id, message.reason || 'Captcha');
+  } else if (message.action === 'resumeAfterCaptcha') {
+    handleResumeAfterCaptcha();
   }
 });
+
+// Khi gặp Captcha: PAUSE auto + cảnh báo Telegram + desktop notification.
+// User remote vào đổi IP Surfshark thủ công, rồi bấm "Tiếp tục" trong popup hoặc panel.
+async function handleCaptchaDetected(fotorTabId, reason) {
+    stopWatchdog();
+    const db = await chrome.storage.local.get(['isRunning', 'currentCount', 'targetCount', 'tempEmail']);
+    if (!db.isRunning) return; // đã dừng rồi thì bỏ qua
+
+    await chrome.storage.local.set({
+        isRunning: false,
+        pauseReason: 'captcha',
+        flowState: 'PAUSED_CAPTCHA'
+    });
+    setBadge('!CAP', '#e74c3c');
+
+    const time = nowVN();
+    const progress = `${db.currentCount || 0}/${db.targetCount || '?'}`;
+    const text = `🛑 <b>CAPTCHA - Cần đổi IP thủ công</b>\n` +
+                 `⏰ ${time}\n` +
+                 `📍 Lý do: ${reason}\n` +
+                 `📊 Tiến độ: ${progress}\n` +
+                 `📧 Email đang xử lý: <code>${db.tempEmail || '(chưa có)'}</code>\n\n` +
+                 `👉 Remote vào đổi IP Surfshark, rồi bấm <b>"Tiếp tục"</b> trong popup extension.`;
+
+    sendTelegram(text);
+    notifyDesktop('🛑 Fotor Auto - Gặp Captcha!', `Cần remote vào đổi IP. ${progress} | ${time}`);
+    console.log('[Captcha] PAUSED. Đợi user resume.');
+}
+
+async function handleResumeAfterCaptcha() {
+    const db = await chrome.storage.local.get(['pauseReason']);
+    if (db.pauseReason !== 'captcha') {
+        console.log('[Resume] Không có pause vì captcha, bỏ qua.');
+        return;
+    }
+    await chrome.storage.local.set({
+        isRunning: true,
+        pauseReason: null,
+        flowState: 'START_IMAIL'
+    });
+    setBadge('GO', '#27ae60');
+    sendTelegram(`▶️ <b>Đã tiếp tục</b> sau Captcha\n⏰ ${nowVN()}`, { silent: true });
+    console.log('[Resume] Tiếp tục chu trình.');
+    skipIteration(); // đóng tab cũ + mở lượt mới
+}
 
 async function startNextIteration() {
   const db = await chrome.storage.local.get(['isRunning', 'currentCount', 'targetCount', 'emailProvider']);
@@ -171,10 +306,18 @@ async function handleCodeFetched(code) {
 
 async function handleRegistrationDone(tabId, refLink = 'Không rõ') {
   stopWatchdog(); // Hoàn thành -> Dừng tính giờ
-  const db = await chrome.storage.local.get(['successList', 'currentCount', 'tempEmail', 'randomPass', 'imailTabId', 'fotorTabId', 'targetUrl', 'referralUsage', 'refLinkQueue', 'targetCount']);
-  
+  const db = await chrome.storage.local.get([
+      'successList', 'currentCount', 'tempEmail', 'randomPass',
+      'imailTabId', 'fotorTabId', 'targetUrl', 'referralUsage',
+      'refLinkQueue', 'targetCount', 'completedRefAccs'
+  ]);
+
+  const createdAt = nowVN();
+  // Format mỗi dòng: createdAt | email | pass | refLink-của-acc-này
+  // (acc Fotor chỉ valid 7 ngày nên cần datetime để tracking bán/dùng)
+  const accLine = `${createdAt} | ${db.tempEmail} | ${db.randomPass} | ${refLink}`;
   const newList = db.successList || [];
-  newList.push(`${db.tempEmail}|${db.randomPass}|${refLink}`);
+  newList.push(accLine);
 
   let queue = db.refLinkQueue || [];
   if (refLink && refLink.includes('fotor.com/referrer') && !queue.includes(refLink)) {
@@ -187,35 +330,110 @@ async function handleRegistrationDone(tabId, refLink = 'Không rõ') {
   let tUrl = db.targetUrl;
   let usedRefLinks = db.usedRefLinks || [];
 
+  // Pool "đã đủ ref": các acc của ta mà ref-link của chúng đã được dùng đủ 20 lần.
+  // Mỗi acc trong pool = 1 acc đã ăn full credit (cao giá trị, có thể bán/dùng).
+  let completedRefAccs = db.completedRefAccs || [];
+  let batchToSend = null; // khi pool đủ 20 -> snapshot ra đây để gửi file
+
   if (usage >= 20 && queue.length > 0) {
-      // Ghi note link vừa dùng xong 20 lần
+      // Link tUrl vừa đạt 20 ref -> CHỦ của link tUrl = acc "đã đủ ref".
       usedRefLinks.push({ link: tUrl, usedAt: new Date().toISOString() });
+
+      // Tìm acc trong successList có refLink == tUrl (acc đó là chủ link).
+      // Nếu tUrl là seed-link của user (không phải acc của ta tạo) -> không có trong list, skip.
+      const ownerLine = newList.find(line => line.endsWith(' | ' + tUrl));
+      if (ownerLine) {
+          completedRefAccs.push(ownerLine);
+          console.log(`[ĐủRef] Acc "đã đủ ref" mới: ${ownerLine}. Pool: ${completedRefAccs.length}/20`);
+      } else {
+          console.log(`[ĐủRef] Link gốc của user vừa đủ 20, không phải acc của ta. Skip pool.`);
+      }
+
+      // Pool đủ 20 -> snapshot 20 đầu, giữ phần dư
+      if (completedRefAccs.length >= 20) {
+          batchToSend = completedRefAccs.slice(0, 20);
+          completedRefAccs = completedRefAccs.slice(20);
+      }
+
       tUrl = queue.shift();
       usage = 0;
   }
 
+  const newCount = (db.currentCount || 0) + 1;
+
   await chrome.storage.local.set({
     successList: newList,
-    currentCount: db.currentCount + 1,
+    currentCount: newCount,
     flowState: 'DONE_ONE',
     referralUsage: usage,
     targetUrl: tUrl,
     refLinkQueue: queue,
-    usedRefLinks: usedRefLinks
+    usedRefLinks: usedRefLinks,
+    completedRefAccs: completedRefAccs
   });
 
-  if (db.imailTabId) chrome.tabs.remove(db.imailTabId).catch(()=>{});
-  if (db.fotorTabId) chrome.tabs.remove(db.fotorTabId).catch(()=>{});
+  // === GỬI TELEGRAM (silent - không kêu chuông, chỉ vào history) ===
+  // Đủ 20 acc "đã đủ ref" -> gửi file
+  if (batchToSend && batchToSend.length > 0) {
+      const fname = `Fotor_DuRef_20acc_${Date.now()}.txt`;
+      const fileContent =
+          `=== 20 TÀI KHOẢN ĐÃ ĐỦ REF (full credit) ===\n` +
+          `Thời điểm gửi: ${createdAt}\n` +
+          `Tổng đã làm: ${newCount}/${db.targetCount}\n` +
+          `Pool còn lại sau gói này: ${completedRefAccs.length} acc\n` +
+          `Mỗi acc dưới đây đã có 20 người ref dưới link của nó.\n` +
+          `============================================\n\n` +
+          batchToSend.join('\n');
+      const caption =
+          `🏆 <b>20 acc ĐÃ ĐỦ REF</b> (full credit)\n` +
+          `📊 Tổng: ${newCount}/${db.targetCount}\n` +
+          `💎 Pool còn: ${completedRefAccs.length} acc đợi đủ 20`;
+      sendTelegramDocument(fname, fileContent, caption, { silent: true });
+  }
 
-  if (db.currentCount + 1 >= db.targetCount) {
+  // Auto-save txt local mỗi 50 acc (phòng lag/crash mất data) - KHÔNG gửi Telegram
+  if (newCount % 50 === 0) {
       const content = newList.join('\n');
       const b64 = btoa(unescape(encodeURIComponent(content)));
       chrome.downloads.download({
           url: 'data:text/plain;charset=utf-8;base64,' + b64,
-          filename: 'Fotor_Accounts_' + Date.now() + '.txt',
+          filename: `Fotor_Accounts_AUTO_${newCount}_` + Date.now() + '.txt',
           saveAs: false
       });
   }
-  
+
+  if (db.imailTabId) chrome.tabs.remove(db.imailTabId).catch(()=>{});
+  if (db.fotorTabId) chrome.tabs.remove(db.fotorTabId).catch(()=>{});
+
+  // Hoàn thành target -> gửi file final + pool còn dư (silent)
+  if (newCount >= db.targetCount) {
+      const content = newList.join('\n');
+      const b64 = btoa(unescape(encodeURIComponent(content)));
+      chrome.downloads.download({
+          url: 'data:text/plain;charset=utf-8;base64,' + b64,
+          filename: 'Fotor_Accounts_FINAL_' + Date.now() + '.txt',
+          saveAs: false
+      });
+
+      let finalContent =
+          `=== FULL LIST ${newCount} ACCOUNTS ===\n` +
+          `Hoàn thành lúc: ${nowVN()}\n` +
+          `=====================================\n\n` +
+          content;
+      let finalCaption = `🎉 <b>HOÀN THÀNH!</b> Đã tạo ${newCount} acc.\n⏰ ${nowVN()}`;
+      if (completedRefAccs.length > 0) {
+          finalContent +=
+              `\n\n=== POOL ĐÃ ĐỦ REF CÒN LẠI (chưa đủ 20 để gửi gói) ===\n` +
+              completedRefAccs.join('\n');
+          finalCaption += `\n💎 Pool đã đủ ref còn dư: ${completedRefAccs.length} acc (đính kèm trong file)`;
+      }
+      sendTelegramDocument(
+          `Fotor_FINAL_${newCount}_${Date.now()}.txt`,
+          finalContent,
+          finalCaption,
+          { silent: true }
+      );
+  }
+
   setTimeout(startNextIteration, 2000);
 }
