@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "Fotor Auto Register (iMail)",
+  "version": "2.0",
+  "description": "Auto-fills registration details on Fotor.ai using imail.edu.vn",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "browsingData",
+    "downloads",
+    "webNavigation",
+    "debugger",
+    "management",
+    "proxy"
+  ],
+  "host_permissions": [
+    "*://*.fotor.com/*",
+    "*://*.imail.edu.vn/*",
+    "*://*.temp-mailo.org/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Fotor Auto Register (iMail)"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.fotor.com/*"],
+      "js": ["hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "*://*.fotor.com/*",
+        "*://*.imail.edu.vn/*",
+        "*://imail.edu.vn/*",
+        "*://*.temp-mailo.org/*",
+        "*://temp-mailo.org/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}
