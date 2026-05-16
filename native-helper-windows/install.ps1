@@ -24,7 +24,8 @@ if (-not $isAdmin) {
     exit 1
 }
 
-$RegKey = 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.fotor.vpn'
+# Registry keys cho TAT CA browsers (Chrome, Edge, Brave, Chrome Beta/Dev)
+# duoc xu ly trong block install/uninstall ben duoi
 
 # ---------- UNINSTALL ----------
 if ($Uninstall) {
@@ -41,14 +42,22 @@ if ($Uninstall) {
         }
     }
 
-    if (Test-Path $RegKey) {
-        Remove-Item $RegKey -Force
-        Write-Host "  Removed HKCU key: $RegKey" -ForegroundColor Yellow
-    }
-    $HKLMKey = 'HKLM:\SOFTWARE\Google\Chrome\NativeMessagingHosts\com.fotor.vpn'
-    if (Test-Path $HKLMKey) {
-        try { Remove-Item $HKLMKey -Force; Write-Host "  Removed HKLM key: $HKLMKey" -ForegroundColor Yellow }
-        catch { Write-Host "  ⚠️  Khong xoa duoc HKLM (chay admin PS de xoa)" -ForegroundColor Yellow }
+    # Xoa keys o moi browser (HKCU + HKLM)
+    $UninstallBrowserKeys = @(
+        'Software\Google\Chrome\NativeMessagingHosts\com.fotor.vpn',
+        'Software\Microsoft\Edge\NativeMessagingHosts\com.fotor.vpn',
+        'Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.fotor.vpn',
+        'Software\Google\Chrome Beta\NativeMessagingHosts\com.fotor.vpn',
+        'Software\Google\Chrome Dev\NativeMessagingHosts\com.fotor.vpn'
+    )
+    foreach ($subKey in $UninstallBrowserKeys) {
+        foreach ($hive in @('HKCU:', 'HKLM:')) {
+            $key = "$hive\$subKey"
+            if (Test-Path $key) {
+                try { Remove-Item $key -Force; Write-Host "  Removed: $key" -ForegroundColor Yellow }
+                catch { Write-Host "  ⚠️  $key (can admin)" -ForegroundColor DarkYellow }
+            }
+        }
     }
     if (Test-Path $InstallDir) {
         Remove-Item $InstallDir -Recurse -Force
@@ -71,8 +80,14 @@ if (-not $ExtensionId) {
     Write-Host "❌ Thieu -ExtensionId. Vao chrome://extensions, bat Developer mode, copy ID cua 'Fotor Auto Register'." -ForegroundColor Red
     exit 1
 }
-if ($ExtensionId -notmatch '^[a-z]{32}$') {
-    Write-Host "⚠️  Extension ID khong dung format (32 chu thuong). Tiep tuc..." -ForegroundColor Yellow
+if ($ExtensionId -notmatch '^[a-p]{32}$') {
+    # Chrome extension IDs chi chua chu cai a-p (KHONG so, KHONG q-z)
+    # Confusion phu bien: 'l' (chu L thuong) vs '1' (so 1), 'i' vs '1'
+    Write-Host "❌ Extension ID SAI FORMAT! Chua bao gio chua so." -ForegroundColor Red
+    Write-Host "   Cac chu phai a-p (vd 'l' khong phai '1', 'i' khong phai '1')" -ForegroundColor Yellow
+    Write-Host "   Vao chrome://extensions hoac edge://extensions -> Developer mode -> copy ID can than" -ForegroundColor Yellow
+    Write-Host "   Da nhan: $ExtensionId" -ForegroundColor Yellow
+    exit 1
 }
 
 Write-Host "==> Installing Fotor VPN Helper" -ForegroundColor Cyan
@@ -167,25 +182,35 @@ $manifest = @"
 [System.IO.File]::WriteAllText($manifestPath, $manifest, [System.Text.UTF8Encoding]::new($false))
 Write-Host "  ✓ Manifest written (UTF-8 no BOM): $manifestPath" -ForegroundColor Green
 
-# 6. Register vao Chrome registry (CA HKCU + HKLM)
-# HKCU: cho Chrome non-admin. HKLM: cho Chrome admin (security policy:
-# elevated processes khong trust HKCU). Ghi ca 2 de phong moi truong hop.
-if (-not (Test-Path 'HKCU:\Software\Google\Chrome\NativeMessagingHosts')) {
-    New-Item -Path 'HKCU:\Software\Google\Chrome\NativeMessagingHosts' -Force | Out-Null
-}
-New-Item -Path $RegKey -Value $manifestPath -Force | Out-Null
-Write-Host "  ✓ Registry HKCU: $RegKey" -ForegroundColor Green
-
-$HKLMKey = 'HKLM:\SOFTWARE\Google\Chrome\NativeMessagingHosts\com.fotor.vpn'
-try {
-    if (-not (Test-Path 'HKLM:\SOFTWARE\Google\Chrome\NativeMessagingHosts')) {
-        New-Item -Path 'HKLM:\SOFTWARE\Google\Chrome\NativeMessagingHosts' -Force | Out-Null
+# 6. Register native host vao TAT CA Chromium-based browsers
+# HKCU: non-admin browser. HKLM: admin browser (security policy).
+# Browsers supported: Chrome, Edge, Brave, Chrome Beta/Dev/Canary
+$BrowserKeys = @(
+    'Software\Google\Chrome\NativeMessagingHosts',
+    'Software\Microsoft\Edge\NativeMessagingHosts',
+    'Software\BraveSoftware\Brave-Browser\NativeMessagingHosts',
+    'Software\Google\Chrome Beta\NativeMessagingHosts',
+    'Software\Google\Chrome Dev\NativeMessagingHosts'
+)
+foreach ($subKey in $BrowserKeys) {
+    foreach ($hive in @('HKCU:', 'HKLM:')) {
+        $parent = "$hive\$subKey"
+        $key = "$parent\com.fotor.vpn"
+        try {
+            if (-not (Test-Path $parent)) {
+                New-Item -Path $parent -Force -ErrorAction Stop | Out-Null
+            }
+            New-Item -Path $key -Value $manifestPath -Force -ErrorAction Stop | Out-Null
+            Write-Host "  ✓ $hive\$subKey\com.fotor.vpn" -ForegroundColor Green
+        } catch {
+            if ($hive -eq 'HKLM:') {
+                # HKLM can admin -> warning only
+                Write-Host "  ⚠️  $hive can admin PS (browser admin se fail)" -ForegroundColor DarkYellow
+            } else {
+                Write-Host "  ⚠️  $hive fail: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
     }
-    New-Item -Path $HKLMKey -Value $manifestPath -Force | Out-Null
-    Write-Host "  ✓ Registry HKLM: $HKLMKey (cho Chrome admin mode)" -ForegroundColor Green
-} catch {
-    Write-Host "  ⚠️  Khong ghi duoc HKLM (can admin PS). Chrome admin se fail!" -ForegroundColor Yellow
-    Write-Host "      Chay lai installer trong PowerShell as Administrator." -ForegroundColor Yellow
 }
 
 # 7. Check / tao config dir
