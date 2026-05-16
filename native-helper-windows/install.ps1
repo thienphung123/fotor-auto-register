@@ -162,7 +162,27 @@ try {
         -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
         -Hidden
     Register-ScheduledTask -TaskName $TaskName -Action $taskAction -Principal $taskPrincipal -Settings $taskSettings -Force | Out-Null
-    Write-Host "  ✓ Scheduled Task: $TaskName (RunAs $env:USERNAME Highest+S4U, no password, no UAC)" -ForegroundColor Green
+    Write-Host "  ✓ Scheduled Task: $TaskName (RunAs $env:USERNAME Highest+S4U)" -ForegroundColor Green
+
+    # QUAN TRONG: cap quyen RUN cho BUILTIN\Users tren task nay.
+    # Default ACL: task RunAs ACER chi cho ACER + admin /run. Nhung ACER trong
+    # session non-elevated bi UAC filter -> token deny-only -> /run fail.
+    # Fix: set SDDL granting BUILTIN\Users (BU) full access (incl. /run).
+    try {
+        $svc = New-Object -ComObject Schedule.Service
+        $svc.Connect()
+        $folder = $svc.GetFolder("\")
+        $taskObj = $folder.GetTask($TaskName)
+        # SDDL: Owner=Admin, Group=Admin, DACL=SYSTEM full + Admin full + Users full
+        # FA = File All Access (Generic), gom: read + write + execute + delete
+        # SY = NT AUTHORITY\SYSTEM, BA = BUILTIN\Administrators, BU = BUILTIN\Users
+        $sddl = "O:BAG:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;BU)"
+        $taskObj.SetSecurityDescriptor($sddl, 0)
+        Write-Host "  ✓ Task ACL: BUILTIN\Users full access (schtasks /run OK tu non-elevated)" -ForegroundColor Green
+    } catch {
+        Write-Host "  ⚠️  Khong set duoc ACL: $_" -ForegroundColor Yellow
+        Write-Host "      schtasks /run se fail tu non-elevated session" -ForegroundColor Yellow
+    }
 } catch {
     Write-Host "  ❌ Khong tao duoc Scheduled Task: $_" -ForegroundColor Red
     Write-Host "      Tunnel rotate se fail. Can admin PS de tao task." -ForegroundColor Yellow
