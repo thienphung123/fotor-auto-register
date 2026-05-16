@@ -154,12 +154,52 @@ function listActiveTunnels() {
     } catch (e) { log('listActiveTunnels err: ' + e.message); return []; }
 }
 
+// === Task Scheduler approach (no Chrome admin needed) ===
+// helper.js (non-admin Chrome) ghi action vao C:\ProgramData\fotor-vpn-helper\action.txt
+// roi trigger scheduled task "FotorWG-Elevated" (run as SYSTEM) qua schtasks /run.
+// Task chay wg-elevated.bat -> wireguard.exe /installtunnelservice (privileged).
+// helper.js poll listActiveTunnels() de wait completion.
+const ELEVATED_DATA_DIR = 'C:\\ProgramData\\fotor-vpn-helper';
+const ELEVATED_ACTION_FILE = path.join(ELEVATED_DATA_DIR, 'action.txt');
+const ELEVATED_RESULT_FILE = path.join(ELEVATED_DATA_DIR, 'result.txt');
+const ELEVATED_TASK_NAME = 'FotorWG-Elevated';
+
+function triggerElevatedTask(action, param) {
+    try { fs.mkdirSync(ELEVATED_DATA_DIR, { recursive: true }); } catch (_) {}
+    try { if (fs.existsSync(ELEVATED_RESULT_FILE)) fs.unlinkSync(ELEVATED_RESULT_FILE); } catch (_) {}
+    fs.writeFileSync(ELEVATED_ACTION_FILE, `${action} ${param}`, 'utf8');
+    log(`[elevated] trigger task ${ELEVATED_TASK_NAME} - ${action} ${param}`);
+    execSync(`schtasks /run /tn "${ELEVATED_TASK_NAME}"`, { timeout: 5000 });
+}
+
+function waitForTunnelState(tunnelName, shouldExist, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const active = listActiveTunnels();
+        const has = active.includes(tunnelName);
+        if (has === shouldExist) return true;
+        try { execSync('cmd /c ping 127.0.0.1 -n 2 > nul', { timeout: 3000 }); } catch (_) {}
+    }
+    return false;
+}
+
+function readElevatedResult() {
+    try {
+        if (fs.existsSync(ELEVATED_RESULT_FILE)) {
+            return fs.readFileSync(ELEVATED_RESULT_FILE, 'utf8').trim();
+        }
+    } catch (_) {}
+    return null;
+}
+
 function bringDownAll(wgExe) {
     const active = listActiveTunnels();
     for (const name of active) {
         try {
-            log('uninstall tunnel: ' + name);
-            execFileSync(wgExe, ['/uninstalltunnelservice', name], { timeout: 10000 });
+            triggerElevatedTask('UNINSTALL', name);
+            const ok = waitForTunnelState(name, false, 10000);
+            const result = readElevatedResult();
+            log(`[elevated] UNINSTALL ${name} -> tunnel gone:${ok}, result:${result}`);
         } catch (e) {
             log('uninstall ' + name + ' err: ' + (e.message || e));
         }
@@ -168,13 +208,19 @@ function bringDownAll(wgExe) {
 }
 
 function bringUp(wgExe, configPath) {
+    const tunnelName = path.basename(configPath, '.conf');
     try {
-        log('install tunnel: ' + configPath);
-        execFileSync(wgExe, ['/installtunnelservice', configPath], { timeout: 15000 });
+        triggerElevatedTask('INSTALL', configPath);
+        const ok = waitForTunnelState(tunnelName, true, 15000);
+        const result = readElevatedResult();
+        log(`[elevated] INSTALL ${tunnelName} -> tunnel up:${ok}, result:${result}`);
+        if (!ok) {
+            log('install tunnel TIMEOUT (task may have failed)');
+            return false;
+        }
         return true;
     } catch (e) {
         log('install tunnel FAILED: ' + (e.message || e));
-        if (e.stderr) log('stderr: ' + e.stderr.toString().slice(0, 500));
         return false;
     }
 }

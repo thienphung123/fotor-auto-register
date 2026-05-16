@@ -54,6 +54,14 @@ if ($Uninstall) {
         Remove-Item $InstallDir -Recurse -Force
         Write-Host "  Removed install dir: $InstallDir" -ForegroundColor Yellow
     }
+    if (Test-Path "C:\ProgramData\fotor-vpn-helper") {
+        Remove-Item "C:\ProgramData\fotor-vpn-helper" -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  Removed ProgramData dir" -ForegroundColor Yellow
+    }
+    try {
+        Unregister-ScheduledTask -TaskName "FotorWG-Elevated" -Confirm:$false -ErrorAction Stop
+        Write-Host "  Removed Scheduled Task: FotorWG-Elevated" -ForegroundColor Yellow
+    } catch {}
     Write-Host "✅ Uninstall xong." -ForegroundColor Green
     exit 0
 }
@@ -100,9 +108,44 @@ Write-Host "  ✓ Install dir created" -ForegroundColor Green
 
 # 4. Copy files
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Copy-Item -Path "$ScriptDir\helper.js"  -Destination "$InstallDir\helper.js"  -Force
-Copy-Item -Path "$ScriptDir\helper.bat" -Destination "$InstallDir\helper.bat" -Force
+Copy-Item -Path "$ScriptDir\helper.js"        -Destination "$InstallDir\helper.js"        -Force
+Copy-Item -Path "$ScriptDir\helper.bat"       -Destination "$InstallDir\helper.bat"       -Force
+Copy-Item -Path "$ScriptDir\wg-elevated.bat"  -Destination "$InstallDir\wg-elevated.bat"  -Force
 Write-Host "  ✓ Copied helper files" -ForegroundColor Green
+
+# 4b. Tao ProgramData dir cho action/result files (accessible boi SYSTEM + user)
+$DataDir = "C:\ProgramData\fotor-vpn-helper"
+New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
+try {
+    $acl = Get-Acl $DataDir
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        "BUILTIN\Users", "FullControl",
+        "ContainerInherit,ObjectInherit", "None", "Allow"
+    )
+    $acl.SetAccessRule($rule)
+    Set-Acl $DataDir $acl
+    Write-Host "  ✓ ProgramData dir + ACL: $DataDir" -ForegroundColor Green
+} catch {
+    Write-Host "  ⚠️  Khong set ACL cho $DataDir (van OK nhung neu loi 'access denied' khi chay -> sua ACL tay)" -ForegroundColor Yellow
+}
+
+# 4c. Tao Scheduled Task chay as SYSTEM (KHONG can Chrome admin, KHONG UAC moi lan)
+$TaskName = "FotorWG-Elevated"
+try {
+    $taskAction = New-ScheduledTaskAction -Execute "$InstallDir\wg-elevated.bat"
+    $taskPrincipal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest -LogonType ServiceAccount
+    $taskSettings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
+        -Hidden
+    Register-ScheduledTask -TaskName $TaskName -Action $taskAction -Principal $taskPrincipal -Settings $taskSettings -Force | Out-Null
+    Write-Host "  ✓ Scheduled Task: $TaskName (chay as SYSTEM, no UAC)" -ForegroundColor Green
+} catch {
+    Write-Host "  ❌ Khong tao duoc Scheduled Task: $_" -ForegroundColor Red
+    Write-Host "      Tunnel rotate se fail. Can admin PS de tao task." -ForegroundColor Yellow
+}
 
 # 5. Tao manifest voi extension ID + path tuyet doi toi helper.bat
 $manifestPath = "$InstallDir\com.fotor.vpn.json"
