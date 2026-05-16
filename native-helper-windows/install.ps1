@@ -43,7 +43,12 @@ if ($Uninstall) {
 
     if (Test-Path $RegKey) {
         Remove-Item $RegKey -Force
-        Write-Host "  Removed registry key: $RegKey" -ForegroundColor Yellow
+        Write-Host "  Removed HKCU key: $RegKey" -ForegroundColor Yellow
+    }
+    $HKLMKey = 'HKLM:\SOFTWARE\Google\Chrome\NativeMessagingHosts\com.fotor.vpn'
+    if (Test-Path $HKLMKey) {
+        try { Remove-Item $HKLMKey -Force; Write-Host "  Removed HKLM key: $HKLMKey" -ForegroundColor Yellow }
+        catch { Write-Host "  ⚠️  Khong xoa duoc HKLM (chay admin PS de xoa)" -ForegroundColor Yellow }
     }
     if (Test-Path $InstallDir) {
         Remove-Item $InstallDir -Recurse -Force
@@ -116,12 +121,26 @@ $manifest = @"
 Set-Content -Path $manifestPath -Value $manifest -Encoding UTF8
 Write-Host "  ✓ Manifest written: $manifestPath" -ForegroundColor Green
 
-# 6. Register vao Chrome registry
+# 6. Register vao Chrome registry (CA HKCU + HKLM)
+# HKCU: cho Chrome non-admin. HKLM: cho Chrome admin (security policy:
+# elevated processes khong trust HKCU). Ghi ca 2 de phong moi truong hop.
 if (-not (Test-Path 'HKCU:\Software\Google\Chrome\NativeMessagingHosts')) {
     New-Item -Path 'HKCU:\Software\Google\Chrome\NativeMessagingHosts' -Force | Out-Null
 }
 New-Item -Path $RegKey -Value $manifestPath -Force | Out-Null
-Write-Host "  ✓ Registry: $RegKey -> $manifestPath" -ForegroundColor Green
+Write-Host "  ✓ Registry HKCU: $RegKey" -ForegroundColor Green
+
+$HKLMKey = 'HKLM:\SOFTWARE\Google\Chrome\NativeMessagingHosts\com.fotor.vpn'
+try {
+    if (-not (Test-Path 'HKLM:\SOFTWARE\Google\Chrome\NativeMessagingHosts')) {
+        New-Item -Path 'HKLM:\SOFTWARE\Google\Chrome\NativeMessagingHosts' -Force | Out-Null
+    }
+    New-Item -Path $HKLMKey -Value $manifestPath -Force | Out-Null
+    Write-Host "  ✓ Registry HKLM: $HKLMKey (cho Chrome admin mode)" -ForegroundColor Green
+} catch {
+    Write-Host "  ⚠️  Khong ghi duoc HKLM (can admin PS). Chrome admin se fail!" -ForegroundColor Yellow
+    Write-Host "      Chay lai installer trong PowerShell as Administrator." -ForegroundColor Yellow
+}
 
 # 7. Check / tao config dir
 if (-not (Test-Path $ConfigDir)) {
