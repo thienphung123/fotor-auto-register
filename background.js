@@ -11,6 +11,48 @@ const ROTATE_TIMEOUT_MS = 35000; // Helper thường mất 8-15s, để 35s buff
 // Trước đó (2024-04/2026) là 20 ref/link. Sau này nếu Fotor đổi nữa, chỉ sửa 2 constant này.
 const REF_LIMIT = 10;   // số ref đủ cho 1 link → coi link đó xong, chuyển link kế tiếp
 const BATCH_SIZE = 10;  // pool đủ N acc "đã đủ ref" → snapshot gửi 1 file Telegram
+const EXPECTED_DELTA = 20;       // mỗi ref hợp lệ → acc chủ +20 credit
+const ZERO_DELTA_ALERT_N = 3;    // N lần liên tiếp delta=0 → Telegram alert (IP nghi trùng)
+const CREDIT_HISTORY_CAP = 200;
+
+// === Credit Monitor (stateless Puppeteer service local trên VPS) ===
+// Setup: native-helper/credit-monitor/ + sudo systemctl enable --now fotor-credit
+const CREDIT_MONITOR_URL = 'http://127.0.0.1:8765/credit/check';
+const CREDIT_FETCH_TIMEOUT_MS = 30000;
+
+async function callCreditMonitor(cookies, email) {
+    try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), CREDIT_FETCH_TIMEOUT_MS);
+        const res = await fetch(CREDIT_MONITOR_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cookies, reload: true, email }),
+            signal: ctrl.signal,
+        });
+        clearTimeout(t);
+        if (!res.ok) return { credit: null, error: 'http_' + res.status };
+        return await res.json();
+    } catch (e) {
+        return { credit: null, error: 'monitor_unreachable:' + (e.message || e) };
+    }
+}
+
+async function harvestFotorCookies() {
+    try {
+        const cookies = await chrome.cookies.getAll({ domain: 'fotor.com' });
+        // chrome.cookies API trả format đã chuẩn cho Puppeteer-like, chỉ cần map thêm sameSite
+        return cookies.map(c => ({
+            name: c.name, value: c.value, domain: c.domain, path: c.path,
+            secure: c.secure, httpOnly: c.httpOnly,
+            sameSite: c.sameSite || 'no_restriction',
+            expirationDate: c.expirationDate || null,
+        }));
+    } catch (e) {
+        console.warn('[CreditTracker] harvest cookies err:', e);
+        return [];
+    }
+}
 
 async function rotateOpenVPN() {
     return new Promise((resolve) => {
@@ -458,6 +500,66 @@ async function handleRegistrationDone(tabId, refLink = 'Không rõ') {
 
   const newCount = (db.currentCount || 0) + 1;
 
+  // === CREDIT TRACKING ===
+  // 1. Lưu cookies + email vừa reg vào storage (acc này có thể thành chủ link sau)
+  // 2. Tìm chủ của targetUrl hiện tại (acc chủ thật) trong successList → lookup cookies
+  // 3. POST credit-monitor với cookies acc chủ → so delta vs lần trước
+  let creditDb = await chrome.storage.local.get([
+      'accCookies', 'linkToEmail', 'lastOwnerCredit', 'creditHistory'
+  ]);
+  let accCookies = creditDb.accCookies || {};
+  let linkToEmail = creditDb.linkToEmail || {};
+  let lastOwnerCredit = creditDb.lastOwnerCredit || {};
+  let creditHistory = creditDb.creditHistory || [];
+
+  // Harvest cookies của acc CON vừa reg (đang login tab Fotor)
+  const accConEmail = db.tempEmail;
+  if (accConEmail) {
+      const cookies = await harvestFotorCookies();
+      if (cookies.length > 0) {
+          accCookies[accConEmail] = cookies;
+          console.log(`[CreditTracker] Harvested ${cookies.length} cookies for ${accConEmail}`);
+      }
+      // Map refLink của acc CON (link mà acc CON SỞ HỮU, để batch sau đến lượt)
+      if (refLink && refLink.includes('fotor.com/referrer')) {
+          linkToEmail[refLink] = accConEmail;
+      }
+  }
+
+  // Xác định acc chủ HIỆN TẠI: chủ của db.targetUrl (link đang dùng để reg ref)
+  // db.targetUrl ở đây là tUrl TRƯỚC KHI shift (nếu vừa đủ REF_LIMIT mới shift)
+  // → owner của link cũ vừa nhận +20, không phải link mới shift sang
+  const currentOwnerLink = db.targetUrl;
+  const currentOwnerEmail = linkToEmail[currentOwnerLink] || null;
+  let creditEvent = null;
+
+  if (currentOwnerEmail && accCookies[currentOwnerEmail]) {
+      const result = await callCreditMonitor(accCookies[currentOwnerEmail], currentOwnerEmail);
+      const newCredit = result.credit;
+      const prevCredit = lastOwnerCredit[currentOwnerEmail] ?? null;
+      const delta = (newCredit != null && prevCredit != null) ? (newCredit - prevCredit) : null;
+
+      creditEvent = {
+          ts: createdAt,
+          ownerEmail: currentOwnerEmail,
+          ownerLink: currentOwnerLink,
+          accConEmail,
+          prevCredit, newCredit, delta,
+          error: result.error || null,
+      };
+      creditHistory.push(creditEvent);
+      if (creditHistory.length > CREDIT_HISTORY_CAP) {
+          creditHistory.splice(0, creditHistory.length - CREDIT_HISTORY_CAP);
+      }
+      if (newCredit != null) {
+          lastOwnerCredit[currentOwnerEmail] = newCredit;
+      }
+      console.log(`[CreditTracker] Owner ${currentOwnerEmail}: ${prevCredit} → ${newCredit} (Δ${delta})`);
+  } else {
+      // Acc chủ = seed link của user (không có trong successList) → không track được
+      console.log(`[CreditTracker] No owner email for ${currentOwnerLink} (seed link or cookies missing)`);
+  }
+
   await chrome.storage.local.set({
     successList: newList,
     currentCount: newCount,
@@ -466,8 +568,25 @@ async function handleRegistrationDone(tabId, refLink = 'Không rõ') {
     targetUrl: tUrl,
     refLinkQueue: queue,
     usedRefLinks: usedRefLinks,
-    completedRefAccs: completedRefAccs
+    completedRefAccs: completedRefAccs,
+    accCookies, linkToEmail, lastOwnerCredit, creditHistory
   });
+
+  // Alert nếu N lần liên tiếp delta=0 cho cùng owner (Fotor không count → IP nghi trùng)
+  if (creditEvent && creditEvent.delta === 0) {
+      const recentSameOwner = creditHistory
+          .filter(e => e.ownerEmail === creditEvent.ownerEmail)
+          .slice(-ZERO_DELTA_ALERT_N);
+      if (recentSameOwner.length === ZERO_DELTA_ALERT_N &&
+          recentSameOwner.every(e => e.delta === 0)) {
+          sendTelegram(
+              `⚠️ <b>IP nghi trùng!</b>\n` +
+              `Acc chủ <code>${creditEvent.ownerEmail}</code> KHÔNG tăng credit ${ZERO_DELTA_ALERT_N} lần liên tiếp.\n` +
+              `Credit vẫn ở ${creditEvent.newCredit}. Cân nhắc rotate IP.`,
+              { silent: false }
+          );
+      }
+  }
 
   // === GỬI TELEGRAM (silent - không kêu chuông, chỉ vào history) ===
   // Đủ BATCH_SIZE acc "đã đủ ref" -> gửi file

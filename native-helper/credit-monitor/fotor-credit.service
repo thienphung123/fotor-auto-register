@@ -1,0 +1,19 @@
+[Unit]
+Description=Fotor Credit Monitor (headless Chromium scrape)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/fotor-credit
+Environment=FOTOR_PORT=8765
+Environment=FOTOR_LOG=/var/log/fotor-credit/monitor.log
+ExecStart=/usr/bin/node /opt/fotor-credit/monitor.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/var/log/fotor-credit/stdout.log
+StandardError=append:/var/log/fotor-credit/stderr.log
+
+[Install]
+WantedBy=multi-user.target

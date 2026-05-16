@@ -1,0 +1,16 @@
+{
+  "name": "fotor-credit-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Headless Chromium giữ session acc chủ, scrape credit từ Fotor /rewards, expose HTTP API local cho extension.",
+  "main": "monitor.js",
+  "scripts": {
+    "start": "node monitor.js"
+  },
+  "dependencies": {
+    "puppeteer": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

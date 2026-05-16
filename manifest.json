@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Fotor Auto Register (iMail)",
-  "version": "2.2.0",
-  "description": "Auto-fills registration details on Fotor.ai using imail.edu.vn · v2.2: WireGuard rotate (Win+Linux), credit tracker (planned)",
+  "version": "2.3.0",
+  "description": "Auto-fills registration details on Fotor.ai using imail.edu.vn · v2.3: WireGuard rotate + credit tracker (auto cookies harvest)",
   "permissions": [
     "storage",
     "tabs",
@@ -12,13 +12,16 @@
     "webNavigation",
     "alarms",
     "notifications",
-    "nativeMessaging"
+    "nativeMessaging",
+    "cookies"
   ],
   "host_permissions": [
     "*://*.fotor.com/*",
     "*://*.imail.edu.vn/*",
     "*://*.temp-mailo.org/*",
-    "https://api.telegram.org/*"
+    "https://api.telegram.org/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "action": {
     "default_popup": "popup.html",

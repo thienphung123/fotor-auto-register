@@ -208,6 +208,28 @@ function updateUI() {
       usageEl.innerHTML = html;
     }
 
+    // Credit tracker (acc chủ)
+    chrome.storage.local.get(['lastOwnerCredit', 'creditHistory'], (cdb) => {
+      const el = document.getElementById('creditInfo');
+      if (!el) return;
+      const hist = cdb.creditHistory || [];
+      if (hist.length === 0) {
+        el.innerHTML = '💎 <b>Credit acc chủ:</b> chưa có data (đợi acc chủ đầu tiên reg xong)';
+        return;
+      }
+      const last = hist[hist.length - 1];
+      const last5 = hist.slice(-5);
+      const ok = last5.filter(e => e.delta === 20).length;
+      const zero = last5.filter(e => e.delta === 0).length;
+      const err = last5.filter(e => e.error).length;
+      const icon = last.delta === 20 ? '✅' : last.delta === 0 ? '⚠️' : last.error ? '❌' : '?';
+      const ownerShort = (last.ownerEmail || '?').split('@')[0];
+      el.innerHTML =
+        `💎 <b>Acc chủ:</b> <code>${ownerShort}</code> = ${last.newCredit ?? '?'} ${icon} ` +
+        `(Δ${last.delta ?? '?'}) · 5 gần: ${ok}OK/${zero}ko-tăng/${err}lỗi` +
+        (last.error ? `<br><span style="color:#e67e22">⚠️ ${last.error}</span>` : '');
+    });
+
     const startBtn  = document.getElementById('startBtn');
     const stopBtn   = document.getElementById('stopBtn');
     const resumeBtn = document.getElementById('resumeBtn');
