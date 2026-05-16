@@ -269,10 +269,26 @@ async function actionRotate() {
 
     let state = loadState(); state.currentTunnel = cfg.name; saveState(state);
 
-    // Đợi 2s cho tunnel + DNS + route settle
-    await new Promise(r => setTimeout(r, 2000));
+    // Đợi 3s cho tunnel + DNS + route settle
+    await new Promise(r => setTimeout(r, 3000));
     const newIp = await fetchIP();
     log('New IP: ' + newIp);
+
+    // SAFETY: kiem tra tunnel that su pass duoc traffic.
+    // Neu newIp khong doi (tunnel handshake fail) HOAC newIp falsy (mat mang)
+    // -> ROLLBACK ngay (bring down tunnel) de tranh blackhole internet.
+    if (!newIp) {
+        log('ROLLBACK: newIp empty -> tunnel chan internet (handshake fail). Bring down ' + cfg.name);
+        bringDownAll(wgExe);
+        state = loadState(); state.currentTunnel = null; saveState(state);
+        return { ok: false, error: 'tunnel_blackhole', server: cfg.name, oldIp, detail: 'tunnel up but no traffic - private key chua duoc Surfshark cong nhan' };
+    }
+    if (newIp === oldIp) {
+        log('ROLLBACK: newIp === oldIp ('+ newIp +') -> tunnel khong route. Bring down ' + cfg.name);
+        bringDownAll(wgExe);
+        state = loadState(); state.currentTunnel = null; saveState(state);
+        return { ok: false, error: 'tunnel_no_route', server: cfg.name, oldIp, newIp, detail: 'tunnel up nhung IP khong doi - private key sai hoac chua dang ky voi Surfshark' };
+    }
     return { ok: true, server: cfg.name, oldIp, newIp };
 }
 
