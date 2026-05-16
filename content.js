@@ -16,60 +16,32 @@ if (hostname.includes('imail.edu.vn')) {
     }
 }
 
-// === CAPTCHA DETECTOR (Fail-Fast) ===
-// Phát hiện reCAPTCHA HIỂN THỊ THẬT / lỗi IP block -> PAUSE auto + alert qua Telegram + Desktop.
-// User remote vào đổi IP Surfshark thủ công, rồi bấm "Tiếp tục" trong popup.
-// LƯU Ý: Fotor signup luôn preload iframe reCAPTCHA v3 vô hình ngay từ đầu (chưa có challenge),
-// nên KHÔNG được fire chỉ vì iframe tồn tại -> phải check kích thước/visibility thật.
-if (hostname.includes('fotor.com')) {
-    let captchaFired = false;
+// === IP BLOCK DETECTOR (chỉ fire khi IP bị block thật) ===
+// CŨ: bắt cả "recaptcha visible" -> sai vì Fotor hay show recaptcha mà bấm Verify vài lần
+//     vẫn pass được. Chỉ nên PAUSE khi text body rõ ràng nói IP bị block/banned,
+//     hoặc rate-limit retry > 6 lần (logic ở handleFotorLogic).
+// KHÔNG chạy trên /rewards (đã reg thành công).
+if (hostname.includes('fotor.com')
+    && !location.pathname.startsWith('/rewards')) {
+    let ipErrorFired = false;
     const pageLoadAt = Date.now();
-    const GRACE_MS = 5000; // Bỏ qua 5s đầu để Fotor render xong
+    const GRACE_MS = 5000;
 
-    const isElVisible = (el) => {
-        if (!el) return false;
-        const cs = window.getComputedStyle(el);
-        if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 50 && r.height > 30;
-    };
+    const ipBlockRegex = /unusual traffic from your (?:computer|network)|your ip (?:address )?(?:has been )?(?:blocked|banned)|too many requests from your ip|chặn ip của bạn|ip của bạn đã bị chặn/i;
 
-    const captchaWatchdog = setInterval(() => {
-        if (captchaFired) return;
+    const ipWatchdog = setInterval(() => {
+        if (ipErrorFired) return;
         if (Date.now() - pageLoadAt < GRACE_MS) return;
-
         try {
-            // 1) iframe reCAPTCHA chỉ tính khi hiển thị thật (v2 anchor / bframe popup),
-            //    bỏ iframe v3 invisible.
-            const candidateIframes = Array.from(document.querySelectorAll(
-                'iframe[src*="recaptcha"], iframe[title*="recaptcha" i], iframe[title*="reCAPTCHA" i]'
-            ));
-            const visibleRecaptcha = candidateIframes.find(f => {
-                const src = f.src || '';
-                const isAnchor = src.includes('/anchor');
-                const isBframe = src.includes('/bframe');
-                if (!isAnchor && !isBframe) return false;
-                return isElVisible(f);
-            });
-
-            // 2) Element báo lỗi IP block / chặn IP rõ ràng (regex chặt)
             const bodyText = (document.body && document.body.innerText) || '';
-            const hasIpError = /unusual traffic from your (?:computer|network)|your ip (?:address )?(?:has been )?(?:blocked|banned)|too many requests from your ip|chặn ip của bạn|ip của bạn đã bị chặn/i
-                .test(bodyText);
-
-            if (visibleRecaptcha || hasIpError) {
-                captchaFired = true;
-                window.isFotorPaused = true; // dừng vòng auto reg ở handleFotorLogic
-                clearInterval(captchaWatchdog);
-
-                const reason = visibleRecaptcha ? 'reCAPTCHA visible' : 'IP blocked';
-                try { updatePanelStatus(`� Phát hiện Captcha (${reason})! Đã PAUSE - đợi đổi IP thủ công.`); } catch (e) {}
-
-                chrome.runtime.sendMessage({ action: 'CAPTCHA_DETECTED', reason: reason });
+            if (ipBlockRegex.test(bodyText)) {
+                ipErrorFired = true;
+                window.isFotorPaused = true;
+                clearInterval(ipWatchdog);
+                try { updatePanelStatus('🛑 IP bị block! Đã PAUSE - đợi đổi IP.'); } catch (_) {}
+                chrome.runtime.sendMessage({ action: 'CAPTCHA_DETECTED', reason: 'IP blocked' });
             }
-        } catch (e) {
-            // im lặng
-        }
+        } catch (_) {}
     }, 2000);
 }
 
@@ -168,6 +140,33 @@ chrome.storage.local.get(null, (db) => {
 function handleTempMailoLogic(db) {
   createPanel('TMail - System', db.flowState, '', db);
 
+  // === BLANK PAGE DETECTOR ===
+  // temp-mailo.org đôi khi load trắng xóa (JS lỗi, CDN miss, ad-block...).
+  // Dùng sessionStorage để đếm số lần reload trong cùng session, tránh loop vô hạn.
+  if (db.flowState === 'START_IMAIL') {
+    const BLANK_GRACE_MS = 4000; // Chờ 4s cho JS render trước khi kết luận trắng
+    const MAX_RELOAD = 2;        // Tối đa 2 lần reload, nếu vẫn trắng thì skip hẳn
+
+    setTimeout(() => {
+        const bodyText = (document.body ? document.body.innerText : '').trim();
+        const hasContent = bodyText.length > 30;
+        if (hasContent) return; // Trang bình thường, không cần làm gì
+
+        const reloadCount = parseInt(sessionStorage.getItem('tmail_blank_reload') || '0', 10);
+        if (reloadCount < MAX_RELOAD) {
+            sessionStorage.setItem('tmail_blank_reload', String(reloadCount + 1));
+            updatePanelStatus(`Trang TMail trắng! Tự reload lần ${reloadCount + 1}/${MAX_RELOAD}...`);
+            console.log('[TMail] Trang trắng, reload lần', reloadCount + 1);
+            setTimeout(() => location.reload(), 800);
+        } else {
+            sessionStorage.removeItem('tmail_blank_reload');
+            updatePanelStatus('TMail vẫn trắng sau nhiều lần reload! Bỏ qua lượt...');
+            console.log('[TMail] Vẫn trắng sau', MAX_RELOAD, 'lần reload. skipCurrent.');
+            setTimeout(() => { chrome.runtime.sendMessage({ action: 'skipCurrent' }); }, 1000);
+        }
+    }, BLANK_GRACE_MS);
+  }
+
   if (db.flowState === 'START_IMAIL') {
     let attempts = 0;
 
@@ -221,6 +220,7 @@ function handleTempMailoLogic(db) {
                    }, 1000);
                } else {
                    clearInterval(interval);
+                   sessionStorage.removeItem('tmail_blank_reload'); // reset counter khi thành công
                    updatePanelStatus('Đã lấy email: ' + emailStr);
                    chrome.runtime.sendMessage({ action: 'emailFetched', email: emailStr });
                }
