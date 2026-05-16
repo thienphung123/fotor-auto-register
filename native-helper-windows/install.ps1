@@ -147,8 +147,14 @@ try {
 # 4c. Tao Scheduled Task chay as SYSTEM (KHONG can Chrome admin, KHONG UAC moi lan)
 $TaskName = "FotorWG-Elevated"
 try {
+    # Principal: chay nhu user hien tai voi Highest privilege + S4U logon.
+    # S4U (Service-for-User) cho phep task chay khong can mat khau, dung cached
+    # admin token cua user (user must be Administrator group member).
+    # Voi setup nay, schtasks /run thanh cong khi triggered tu user session
+    # (non-admin Chrome/Edge), task chay voi admin token, wireguard.exe OK.
+    # KHONG dung SYSTEM principal vi user khong co quyen /run task SYSTEM.
     $taskAction = New-ScheduledTaskAction -Execute "$InstallDir\wg-elevated.bat"
-    $taskPrincipal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest -LogonType ServiceAccount
+    $taskPrincipal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -RunLevel Highest -LogonType S4U
     $taskSettings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries `
@@ -156,7 +162,7 @@ try {
         -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
         -Hidden
     Register-ScheduledTask -TaskName $TaskName -Action $taskAction -Principal $taskPrincipal -Settings $taskSettings -Force | Out-Null
-    Write-Host "  ✓ Scheduled Task: $TaskName (chay as SYSTEM, no UAC)" -ForegroundColor Green
+    Write-Host "  ✓ Scheduled Task: $TaskName (RunAs $env:USERNAME Highest+S4U, no password, no UAC)" -ForegroundColor Green
 } catch {
     Write-Host "  ❌ Khong tao duoc Scheduled Task: $_" -ForegroundColor Red
     Write-Host "      Tunnel rotate se fail. Can admin PS de tao task." -ForegroundColor Yellow
