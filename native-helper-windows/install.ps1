@@ -118,8 +118,11 @@ $manifest = @"
     ]
 }
 "@
-Set-Content -Path $manifestPath -Value $manifest -Encoding UTF8
-Write-Host "  ✓ Manifest written: $manifestPath" -ForegroundColor Green
+# PS 5.1's "-Encoding UTF8" = UTF-8 with BOM, nhưng Chrome JSON parser STRICT
+# (RFC 8259) khong chap nhan BOM -> reject manifest -> "host is forbidden".
+# Phai ghi UTF-8 KHONG BOM. Cach duy nhat tren PS 5.1: WriteAllText voi false flag.
+[System.IO.File]::WriteAllText($manifestPath, $manifest, [System.Text.UTF8Encoding]::new($false))
+Write-Host "  ✓ Manifest written (UTF-8 no BOM): $manifestPath" -ForegroundColor Green
 
 # 6. Register vao Chrome registry (CA HKCU + HKLM)
 # HKCU: cho Chrome non-admin. HKLM: cho Chrome admin (security policy:
