@@ -1,0 +1,9 @@
+{
+    "name": "com.fotor.vpn",
+    "description": "Fotor VPN Helper (WireGuard rotate)",
+    "path": "__HELPER_BAT_PATH__",
+    "type": "stdio",
+    "allowed_origins": [
+        "chrome-extension://__EXT_ID__/"
+    ]
+}

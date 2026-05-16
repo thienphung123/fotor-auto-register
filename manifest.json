@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Fotor Auto Register (iMail)",
-  "version": "2.1.0",
-  "description": "Auto-fills registration details on Fotor.ai using imail.edu.vn · v2.1: ref limit 10 (Fotor 20pt/ref policy)",
+  "version": "2.2.0",
+  "description": "Auto-fills registration details on Fotor.ai using imail.edu.vn · v2.2: WireGuard rotate (Win+Linux), credit tracker (planned)",
   "permissions": [
     "storage",
     "tabs",
