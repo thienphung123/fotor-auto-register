@@ -1,3 +1,75 @@
+// === OPENVPN AUTO-ROTATE (qua Native Messaging) ===
+// Trên VPS Ubuntu, có 1 Node.js helper chạy as root tại /opt/fotor-vpn-helper/helper.js
+// nhận lệnh ROTATE qua stdio Native Messaging, kill openvpn cũ và spawn .ovpn mới.
+// Helper trả về { ok: true, server, newIp } khi tunnel up thành công.
+// Nếu helper không có (chưa cài) hoặc lỗi -> trả false -> fallback PAUSE manual.
+const NATIVE_HOST_NAME = 'com.fotor.vpn';
+const ROTATE_TIMEOUT_MS = 35000; // Helper thường mất 8-15s, để 35s buffer
+
+// === Fotor referral policy (cập nhật 5/2026) ===
+// Fotor đổi thưởng từ 10pt/ref lên 20pt/ref → chỉ cần 10 ref/link là đủ 200pt full credit.
+// Trước đó (2024-04/2026) là 20 ref/link. Sau này nếu Fotor đổi nữa, chỉ sửa 2 constant này.
+const REF_LIMIT = 10;   // số ref đủ cho 1 link → coi link đó xong, chuyển link kế tiếp
+const BATCH_SIZE = 10;  // pool đủ N acc "đã đủ ref" → snapshot gửi 1 file Telegram
+
+async function rotateOpenVPN() {
+    return new Promise((resolve) => {
+        let port;
+        let settled = false;
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            try { if (port) port.disconnect(); } catch (_) {}
+            resolve(result);
+        };
+        try {
+            port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+        } catch (e) {
+            console.log('[OpenVPN] Không kết nối được native host:', e.message);
+            return resolve({ ok: false, error: 'native_host_missing' });
+        }
+
+        const timeoutId = setTimeout(() => {
+            console.log('[OpenVPN] Helper timeout sau', ROTATE_TIMEOUT_MS, 'ms');
+            finish({ ok: false, error: 'timeout' });
+        }, ROTATE_TIMEOUT_MS);
+
+        port.onMessage.addListener((msg) => {
+            console.log('[OpenVPN] Helper reply:', msg);
+            clearTimeout(timeoutId);
+            finish(msg || { ok: false, error: 'empty_reply' });
+        });
+
+        port.onDisconnect.addListener(() => {
+            const err = chrome.runtime.lastError;
+            console.log('[OpenVPN] Native port disconnected:',
+                err && err.message ? err.message : '(no error)');
+            clearTimeout(timeoutId);
+            finish({ ok: false, error: (err && err.message) || 'disconnected' });
+        });
+
+        setBadge('VPN', '#9b59b6');
+        port.postMessage({ action: 'ROTATE' });
+    });
+}
+
+// Manual rotate trigger (gọi từ popup button "Đổi IP ngay")
+async function manualRotateOpenVPN() {
+    setBadge('VPN', '#9b59b6');
+    const result = await rotateOpenVPN();
+    if (result.ok) {
+        const db = await chrome.storage.local.get(['currentCount']);
+        setBadge(String(db.currentCount || 0), '#27ae60');
+        sendTelegram(
+            `🔄 <b>Manual rotate IP</b>\n⏰ ${nowVN()}\n✅ Server: ${result.server || '?'}\n📡 IP mới: ${result.newIp || '?'}`,
+            { silent: true }
+        );
+    } else {
+        setBadge('!VPN', '#e74c3c');
+    }
+    return result;
+}
+
 // === TELEGRAM BOT (Alert + Storage) ===
 // Người dùng cấu hình bot token + chat id qua popup. Lưu vào chrome.storage.local
 // dưới key 'telegramConfig' = { botToken, chatId, enabled }.
@@ -16,7 +88,7 @@ function nowVN() {
 }
 
 // Gửi 1 FILE txt qua Telegram Bot API (sendDocument).
-// Dùng cho batch 20 acc / batch 50 acc -> gọn 1 file thay vì spam tin nhắn.
+// Dùng cho batch BATCH_SIZE acc / batch 50 acc -> gọn 1 file thay vì spam tin nhắn.
 async function sendTelegramDocument(filename, content, caption = '', opts = {}) {
     const cfg = await getTelegramConfig();
     if (!cfg.enabled || !cfg.botToken || !cfg.chatId) {
@@ -165,16 +237,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleCaptchaDetected(sender && sender.tab && sender.tab.id, message.reason || 'Captcha');
   } else if (message.action === 'resumeAfterCaptcha') {
     handleResumeAfterCaptcha();
+  } else if (message.action === 'manualRotateVPN') {
+    manualRotateOpenVPN().then(r => sendResponse(r));
+    return true; // giữ message channel open cho async sendResponse
   }
 });
 
-// Khi gặp Captcha: PAUSE auto + cảnh báo Telegram + desktop notification.
-// User remote vào đổi IP Surfshark thủ công, rồi bấm "Tiếp tục" trong popup hoặc panel.
+// Khi gặp Captcha/IP block:
+// - Thử rotateOpenVPN qua native helper trên VPS → auto đổi IP → skip lượt → tiếp tục
+// - Nếu helper không có / lỗi → PAUSE + Telegram alert LOUD → user remote vào xử thủ công
 async function handleCaptchaDetected(fotorTabId, reason) {
     stopWatchdog();
     const db = await chrome.storage.local.get(['isRunning', 'currentCount', 'targetCount', 'tempEmail']);
-    if (!db.isRunning) return; // đã dừng rồi thì bỏ qua
+    if (!db.isRunning) return;
 
+    const time = nowVN();
+    const progress = `${db.currentCount || 0}/${db.targetCount || '?'}`;
+
+    // Thử auto-rotate qua OpenVPN native helper
+    const vpnResult = await rotateOpenVPN();
+
+    if (vpnResult && vpnResult.ok) {
+        console.log('[Captcha+OpenVPN] IP đã đổi:', vpnResult.newIp, 'server:', vpnResult.server);
+        setBadge(String(db.currentCount || 0), '#e67e22');
+        sendTelegram(
+            `🔄 <b>Captcha → Auto xoay IP (OpenVPN)</b>\n` +
+            `⏰ ${time}\n` +
+            `📍 Lý do: ${reason}\n` +
+            `📊 ${progress}\n` +
+            `🌍 Server: <code>${vpnResult.server || '?'}</code>\n` +
+            `📡 IP mới: <code>${vpnResult.newIp || '?'}</code>\n` +
+            `✅ Tiếp tục tự động.`,
+            { silent: true }
+        );
+        skipIteration();
+        return;
+    }
+
+    // Surfshark không có → PAUSE + alert LOUD để user xử thủ công
     await chrome.storage.local.set({
         isRunning: false,
         pauseReason: 'captcha',
@@ -182,18 +282,15 @@ async function handleCaptchaDetected(fotorTabId, reason) {
     });
     setBadge('!CAP', '#e74c3c');
 
-    const time = nowVN();
-    const progress = `${db.currentCount || 0}/${db.targetCount || '?'}`;
     const text = `🛑 <b>CAPTCHA - Cần đổi IP thủ công</b>\n` +
                  `⏰ ${time}\n` +
                  `📍 Lý do: ${reason}\n` +
                  `📊 Tiến độ: ${progress}\n` +
-                 `📧 Email đang xử lý: <code>${db.tempEmail || '(chưa có)'}</code>\n\n` +
-                 `👉 Remote vào đổi IP Surfshark, rồi bấm <b>"Tiếp tục"</b> trong popup extension.`;
-
-    sendTelegram(text);
+                 `📧 Email: <code>${db.tempEmail || '(chưa có)'}</code>\n\n` +
+                 `👉 Remote vào đổi IP Surfshark, rồi bấm <b>"Tiếp tục"</b> trong popup.`;
+    sendTelegram(text); // LOUD - không truyền silent
     notifyDesktop('🛑 Fotor Auto - Gặp Captcha!', `Cần remote vào đổi IP. ${progress} | ${time}`);
-    console.log('[Captcha] PAUSED. Đợi user resume.');
+    console.log('[Captcha] Surfshark không có. PAUSED. Đợi user resume.');
 }
 
 async function handleResumeAfterCaptcha() {
@@ -330,13 +427,13 @@ async function handleRegistrationDone(tabId, refLink = 'Không rõ') {
   let tUrl = db.targetUrl;
   let usedRefLinks = db.usedRefLinks || [];
 
-  // Pool "đã đủ ref": các acc của ta mà ref-link của chúng đã được dùng đủ 20 lần.
+  // Pool "đã đủ ref": các acc của ta mà ref-link của chúng đã được dùng đủ REF_LIMIT lần.
   // Mỗi acc trong pool = 1 acc đã ăn full credit (cao giá trị, có thể bán/dùng).
   let completedRefAccs = db.completedRefAccs || [];
-  let batchToSend = null; // khi pool đủ 20 -> snapshot ra đây để gửi file
+  let batchToSend = null; // khi pool đủ BATCH_SIZE -> snapshot ra đây để gửi file
 
-  if (usage >= 20 && queue.length > 0) {
-      // Link tUrl vừa đạt 20 ref -> CHỦ của link tUrl = acc "đã đủ ref".
+  if (usage >= REF_LIMIT && queue.length > 0) {
+      // Link tUrl vừa đạt REF_LIMIT ref -> CHỦ của link tUrl = acc "đã đủ ref".
       usedRefLinks.push({ link: tUrl, usedAt: new Date().toISOString() });
 
       // Tìm acc trong successList có refLink == tUrl (acc đó là chủ link).
@@ -344,15 +441,15 @@ async function handleRegistrationDone(tabId, refLink = 'Không rõ') {
       const ownerLine = newList.find(line => line.endsWith(' | ' + tUrl));
       if (ownerLine) {
           completedRefAccs.push(ownerLine);
-          console.log(`[ĐủRef] Acc "đã đủ ref" mới: ${ownerLine}. Pool: ${completedRefAccs.length}/20`);
+          console.log(`[ĐủRef] Acc "đã đủ ref" mới: ${ownerLine}. Pool: ${completedRefAccs.length}/${BATCH_SIZE}`);
       } else {
-          console.log(`[ĐủRef] Link gốc của user vừa đủ 20, không phải acc của ta. Skip pool.`);
+          console.log(`[ĐủRef] Link gốc của user vừa đủ ${REF_LIMIT}, không phải acc của ta. Skip pool.`);
       }
 
-      // Pool đủ 20 -> snapshot 20 đầu, giữ phần dư
-      if (completedRefAccs.length >= 20) {
-          batchToSend = completedRefAccs.slice(0, 20);
-          completedRefAccs = completedRefAccs.slice(20);
+      // Pool đủ BATCH_SIZE -> snapshot BATCH_SIZE đầu, giữ phần dư
+      if (completedRefAccs.length >= BATCH_SIZE) {
+          batchToSend = completedRefAccs.slice(0, BATCH_SIZE);
+          completedRefAccs = completedRefAccs.slice(BATCH_SIZE);
       }
 
       tUrl = queue.shift();
@@ -373,21 +470,21 @@ async function handleRegistrationDone(tabId, refLink = 'Không rõ') {
   });
 
   // === GỬI TELEGRAM (silent - không kêu chuông, chỉ vào history) ===
-  // Đủ 20 acc "đã đủ ref" -> gửi file
+  // Đủ BATCH_SIZE acc "đã đủ ref" -> gửi file
   if (batchToSend && batchToSend.length > 0) {
-      const fname = `Fotor_DuRef_20acc_${Date.now()}.txt`;
+      const fname = `Fotor_DuRef_${BATCH_SIZE}acc_${Date.now()}.txt`;
       const fileContent =
-          `=== 20 TÀI KHOẢN ĐÃ ĐỦ REF (full credit) ===\n` +
+          `=== ${BATCH_SIZE} TÀI KHOẢN ĐÃ ĐỦ REF (full credit) ===\n` +
           `Thời điểm gửi: ${createdAt}\n` +
           `Tổng đã làm: ${newCount}/${db.targetCount}\n` +
           `Pool còn lại sau gói này: ${completedRefAccs.length} acc\n` +
-          `Mỗi acc dưới đây đã có 20 người ref dưới link của nó.\n` +
+          `Mỗi acc dưới đây đã có ${REF_LIMIT} người ref dưới link của nó.\n` +
           `============================================\n\n` +
           batchToSend.join('\n');
       const caption =
-          `🏆 <b>20 acc ĐÃ ĐỦ REF</b> (full credit)\n` +
+          `🏆 <b>${BATCH_SIZE} acc ĐÃ ĐỦ REF</b> (full credit)\n` +
           `📊 Tổng: ${newCount}/${db.targetCount}\n` +
-          `💎 Pool còn: ${completedRefAccs.length} acc đợi đủ 20`;
+          `💎 Pool còn: ${completedRefAccs.length} acc đợi đủ ${BATCH_SIZE}`;
       sendTelegramDocument(fname, fileContent, caption, { silent: true });
   }
 
@@ -423,7 +520,7 @@ async function handleRegistrationDone(tabId, refLink = 'Không rõ') {
       let finalCaption = `🎉 <b>HOÀN THÀNH!</b> Đã tạo ${newCount} acc.\n⏰ ${nowVN()}`;
       if (completedRefAccs.length > 0) {
           finalContent +=
-              `\n\n=== POOL ĐÃ ĐỦ REF CÒN LẠI (chưa đủ 20 để gửi gói) ===\n` +
+              `\n\n=== POOL ĐÃ ĐỦ REF CÒN LẠI (chưa đủ ${BATCH_SIZE} để gửi gói) ===\n` +
               completedRefAccs.join('\n');
           finalCaption += `\n💎 Pool đã đủ ref còn dư: ${completedRefAccs.length} acc (đính kèm trong file)`;
       }

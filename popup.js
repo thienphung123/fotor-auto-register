@@ -1,3 +1,7 @@
+// === Fotor referral policy (đồng bộ với background.js) ===
+// Fotor (5/2026): 20pt/ref → 10 ref/link là đủ 200pt full credit.
+const REF_LIMIT = 10;
+
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('startBtn').addEventListener('click', async () => {
     const targetCount = parseInt(document.getElementById('targetCount').value, 10);
@@ -48,6 +52,34 @@ document.addEventListener('DOMContentLoaded', () => {
   // Restore saved provider selection
   chrome.storage.local.get(['emailProvider'], (data) => {
     if (data.emailProvider) document.getElementById('emailProvider').value = data.emailProvider;
+  });
+
+  // === Manual Rotate VPN (đổi IP qua OpenVPN helper trên VPS) ===
+  document.getElementById('rotateVpnBtn').addEventListener('click', () => {
+    const btn = document.getElementById('rotateVpnBtn');
+    const vpnStatus = document.getElementById('vpnStatus');
+    const original = btn.innerText;
+    btn.disabled = true;
+    btn.innerText = '⏳ Đang đổi IP...';
+    vpnStatus.innerText = 'Helper đang kill openvpn cũ + connect server mới (10-30s)...';
+    vpnStatus.style.color = '#9b59b6';
+    chrome.runtime.sendMessage({ action: 'manualRotateVPN' }, (res) => {
+      btn.disabled = false;
+      btn.innerText = original;
+      if (chrome.runtime.lastError) {
+        vpnStatus.innerText = '❌ Lỗi: ' + chrome.runtime.lastError.message;
+        vpnStatus.style.color = '#e74c3c';
+        return;
+      }
+      if (res && res.ok) {
+        vpnStatus.innerText = `✅ Server: ${res.server || '?'} | IP: ${res.newIp || '?'}`;
+        vpnStatus.style.color = '#27ae60';
+      } else {
+        const err = (res && res.error) || 'unknown';
+        vpnStatus.innerText = `❌ Fail: ${err}${res && res.detail ? ' - ' + res.detail : ''}`;
+        vpnStatus.style.color = '#e74c3c';
+      }
+    });
   });
 
   // === Resume sau Captcha ===
@@ -130,11 +162,11 @@ function autoSave(list) {
 
         let summary = '\r\n\r\n===== THỐNG KÊ =====\r\n';
         summary += `Tổng tài khoản đã tạo: ${list.length}\r\n`;
-        summary += `Ref đang dùng: ${db.targetUrl || '?'} (${db.referralUsage || 0}/20 lần)\r\n`;
+        summary += `Ref đang dùng: ${db.targetUrl || '?'} (${db.referralUsage || 0}/${REF_LIMIT} lần)\r\n`;
         summary += `Kho link chờ: ${(db.refLinkQueue || []).length} link\r\n`;
 
         if (used.length > 0) {
-            summary += '\r\nRef đã cày đủ 20 lần:\r\n';
+            summary += `\r\nRef đã cày đủ ${REF_LIMIT} lần:\r\n`;
             used.forEach(u => {
                 summary += `  ${u.link} - hoàn thành lúc ${new Date(u.usedAt).toLocaleString('vi-VN')}\r\n`;
             });
@@ -166,9 +198,9 @@ function updateUI() {
     const usageEl = document.getElementById('refUsageInfo');
     if (usageEl) {
       const currentLink = res.targetUrl ? res.targetUrl.replace('https://www.fotor.com/referrer/','').replace('https://www.fotor.com/','') : '?';
-      let html = `🔥 <b>Link đang dùng:</b> <span style="color:#2980b9">${currentLink}</span> (${usage}/20 lượt) | Kho chờ: ${queueLen}`;
+      let html = `🔥 <b>Link đang dùng:</b> <span style="color:#2980b9">${currentLink}</span> (${usage}/${REF_LIMIT} lượt) | Kho chờ: ${queueLen}`;
       if (used.length > 0) {
-        html += `<br><span style="color:#27ae60">✅ Đã xong 20 lần: ` + used.map(u => {
+        html += `<br><span style="color:#27ae60">✅ Đã xong ${REF_LIMIT} lần: ` + used.map(u => {
             const code = u.link.replace('https://www.fotor.com/referrer/','');
             return code + ' (' + new Date(u.usedAt).toLocaleTimeString('vi-VN') + ')';
           }).join(', ') + `</span>`;
