@@ -1,0 +1,9 @@
+{
+  "name": "com.fotor.vpn",
+  "description": "Fotor Auto Register - OpenVPN rotator helper",
+  "path": "/opt/fotor-vpn-helper/helper.sh",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://__EXT_ID__/"
+  ]
+}
