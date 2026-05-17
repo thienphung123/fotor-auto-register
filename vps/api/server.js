@@ -26,6 +26,8 @@ const COUNTRIES = require('./countries.js');
 const PORT = parseInt(process.env.PORT || '8443', 10);
 const TOKEN = process.env.VPS_API_TOKEN || '';
 const SLOTS_RAW = (process.env.SLOTS || 'gluetun-1:8000,gluetun-2:8000,gluetun-3:8000').split(',');
+const CREDIT_MONITOR_HOST = process.env.CREDIT_MONITOR_HOST || 'credit-monitor';
+const CREDIT_MONITOR_PORT = parseInt(process.env.CREDIT_MONITOR_PORT || '8765', 10);
 const SLOTS = SLOTS_RAW.map((s, i) => {
     const [host, port] = s.split(':');
     return { index: i + 1, host: host.trim(), port: parseInt(port, 10) || 8000 };
@@ -238,6 +240,37 @@ async function handleRequest(req, res) {
             }
             const result = await rotateSlot(slotIdx, query.country || null);
             return jsonReply(res, 200, { ok: true, ...result, elapsedMs: Date.now() - startTime });
+        }
+
+        // === Credit monitor proxy ===
+        // POST /credit/check {cookies, reload?, email?} -> forward to credit-monitor:8765
+        if (req.method === 'POST' && pathname === '/credit/check') {
+            const body = await new Promise((resolve, reject) => {
+                const chunks = [];
+                req.on('data', c => chunks.push(c));
+                req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+                req.on('error', reject);
+            });
+            const result = await new Promise((resolve, reject) => {
+                const upstreamReq = http.request({
+                    host: CREDIT_MONITOR_HOST,
+                    port: CREDIT_MONITOR_PORT,
+                    path: '/credit/check',
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+                    timeout: 60000
+                }, (upstreamRes) => {
+                    let data = '';
+                    upstreamRes.on('data', c => data += c);
+                    upstreamRes.on('end', () => resolve({ status: upstreamRes.statusCode, body: data }));
+                });
+                upstreamReq.on('error', reject);
+                upstreamReq.on('timeout', () => { upstreamReq.destroy(); reject(new Error('credit_monitor_timeout')); });
+                upstreamReq.write(body);
+                upstreamReq.end();
+            });
+            res.writeHead(result.status || 200, { 'Content-Type': 'application/json' });
+            return res.end(result.body);
         }
 
         if (req.method === 'POST' && pathname === '/stop') {

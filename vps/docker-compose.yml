@@ -99,6 +99,21 @@ services:
       - fotor-net
     restart: unless-stopped
 
+  # ===== Credit Monitor (Puppeteer + Chromium) =====
+  # Stateless service nhan cookies + scrape Fotor /rewards. Goi qua API.
+  credit-monitor:
+    build:
+      context: ./credit-monitor
+      dockerfile: Dockerfile
+    container_name: fotor-credit-monitor
+    environment:
+      - FOTOR_PORT=8765
+      - TZ=Asia/Ho_Chi_Minh
+    networks:
+      - fotor-net
+    restart: unless-stopped
+    # Khong expose port 8765 ra host - chi noi bo (api proxy qua)
+
   # ===== API orchestrator =====
   api:
     build:
@@ -111,6 +126,8 @@ services:
       - PROXY_PASS=${PROXY_PASS}
       - PORT=8443
       - SLOTS=gluetun-1:8000,gluetun-2:8000,gluetun-3:8000
+      - CREDIT_MONITOR_HOST=credit-monitor
+      - CREDIT_MONITOR_PORT=8765
       - TZ=Asia/Ho_Chi_Minh
     volumes:
       - ./api/certs:/app/certs  # persist self-signed cert
@@ -122,6 +139,7 @@ services:
       - gluetun-1
       - gluetun-2
       - gluetun-3
+      - credit-monitor
     restart: unless-stopped
 
 networks:

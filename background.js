@@ -1,10 +1,15 @@
-// === OPENVPN AUTO-ROTATE (qua Native Messaging) ===
-// Trên VPS Ubuntu, có 1 Node.js helper chạy as root tại /opt/fotor-vpn-helper/helper.js
-// nhận lệnh ROTATE qua stdio Native Messaging, kill openvpn cũ và spawn .ovpn mới.
-// Helper trả về { ok: true, server, newIp } khi tunnel up thành công.
-// Nếu helper không có (chưa cài) hoặc lỗi -> trả false -> fallback PAUSE manual.
+// === VPN ROTATE - 2 modes ===
+// 1. VPS Proxy (default v2.4+): chrome.proxy.settings -> VPS gluetun container.
+//    Chi affect Chrome traffic, host PC khong bi anh huong. Code o proxy-manager.js.
+// 2. Native Messaging (legacy v2.3): WireGuard/OpenVPN helper tren host PC.
+//    Affect toan he thong, deprecated.
+//
+// proxy-manager.js exposes globalThis.ProxyManager voi cac function:
+//   getVpsConfig, saveVpsConfig, setProxySlot, clearProxy, rotateProxy, getStatus
+importScripts('proxy-manager.js');
+
 const NATIVE_HOST_NAME = 'com.fotor.vpn';
-const ROTATE_TIMEOUT_MS = 35000; // Helper thường mất 8-15s, để 35s buffer
+const ROTATE_TIMEOUT_MS = 35000; // Native helper thuong mat 8-15s, de 35s buffer
 
 // === Fotor referral policy (cập nhật 5/2026) ===
 // Fotor đổi thưởng từ 10pt/ref lên 20pt/ref → chỉ cần 10 ref/link là đủ 200pt full credit.
@@ -15,16 +20,46 @@ const EXPECTED_DELTA = 20;       // mỗi ref hợp lệ → acc chủ +20 credi
 const ZERO_DELTA_ALERT_N = 3;    // N lần liên tiếp delta=0 → Telegram alert (IP nghi trùng)
 const CREDIT_HISTORY_CAP = 200;
 
-// === Credit Monitor (stateless Puppeteer service local trên VPS) ===
-// Setup: native-helper/credit-monitor/ + sudo systemctl enable --now fotor-credit
-const CREDIT_MONITOR_URL = 'http://127.0.0.1:8765/credit/check';
+// === Credit Monitor (stateless Puppeteer service) ===
+// 2 modes:
+//   1. VPS mode (uu tien): goi qua VPS API:
+//      POST https://<vps-host>:8443/credit/check  Bearer <VPS_API_TOKEN>
+//      Yeu cau: deploy credit-monitor service len VPS (vps/credit-monitor/)
+//   2. Local mode (legacy): http://127.0.0.1:8765/credit/check
+//      Yeu cau: chay native-helper/credit-monitor/ tren PC
+const CREDIT_MONITOR_URL_LOCAL = 'http://127.0.0.1:8765/credit/check';
 const CREDIT_FETCH_TIMEOUT_MS = 30000;
 
 async function callCreditMonitor(cookies, email) {
+    // Try VPS mode first if configured
+    try {
+        const cfg = await globalThis.ProxyManager.getVpsConfig();
+        if (cfg && cfg.host && cfg.apiToken) {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), CREDIT_FETCH_TIMEOUT_MS);
+            const res = await fetch(`https://${cfg.host}:8443/credit/check`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${cfg.apiToken}`
+                },
+                body: JSON.stringify({ cookies, reload: true, email }),
+                signal: ctrl.signal,
+            });
+            clearTimeout(t);
+            if (res.ok) return await res.json();
+            // Falls through to local mode if VPS returns 4xx/5xx
+            console.warn('[CreditMonitor] VPS returned', res.status, '-> fallback local');
+        }
+    } catch (e) {
+        console.warn('[CreditMonitor] VPS unreachable:', e.message, '-> fallback local');
+    }
+
+    // Local fallback
     try {
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), CREDIT_FETCH_TIMEOUT_MS);
-        const res = await fetch(CREDIT_MONITOR_URL, {
+        const res = await fetch(CREDIT_MONITOR_URL_LOCAL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ cookies, reload: true, email }),
@@ -96,20 +131,49 @@ async function rotateOpenVPN() {
 }
 
 // Manual rotate trigger (gọi từ popup button "Đổi IP ngay")
+// Uu tien VPS proxy mode neu da config; fallback native helper.
 async function manualRotateOpenVPN() {
     setBadge('VPN', '#9b59b6');
+
+    // Try VPS proxy mode first
+    try {
+        const cfg = await globalThis.ProxyManager.getVpsConfig();
+        if (cfg && cfg.host && cfg.apiToken) {
+            const result = await globalThis.ProxyManager.rotateProxy();
+            const db = await chrome.storage.local.get(['currentCount']);
+            setBadge(String(db.currentCount || 0), '#27ae60');
+            sendTelegram(
+                `🔄 <b>Manual rotate IP (VPS)</b>\n⏰ ${nowVN()}\n✅ Slot: ${result.slot}\n🌍 Country: ${result.country || '?'}\n📡 IP: ${result.ip || '?'}`,
+                { silent: true }
+            );
+            return {
+                ok: true,
+                mode: 'vps_proxy',
+                server: `slot-${result.slot}-${result.country || '?'}`,
+                newIp: result.ip,
+                slot: result.slot,
+                country: result.country,
+                elapsedMs: result.elapsedMs
+            };
+        }
+    } catch (e) {
+        console.warn('[VPN] VPS proxy fail, fallback native:', e.message);
+        // Fall through to native helper
+    }
+
+    // Fallback: legacy native messaging
     const result = await rotateOpenVPN();
     if (result.ok) {
         const db = await chrome.storage.local.get(['currentCount']);
         setBadge(String(db.currentCount || 0), '#27ae60');
         sendTelegram(
-            `🔄 <b>Manual rotate IP</b>\n⏰ ${nowVN()}\n✅ Server: ${result.server || '?'}\n📡 IP mới: ${result.newIp || '?'}`,
+            `🔄 <b>Manual rotate IP (Native)</b>\n⏰ ${nowVN()}\n✅ Server: ${result.server || '?'}\n📡 IP mới: ${result.newIp || '?'}`,
             { silent: true }
         );
     } else {
         setBadge('!VPN', '#e74c3c');
     }
-    return result;
+    return { ...result, mode: 'native' };
 }
 
 // === TELEGRAM BOT (Alert + Storage) ===
@@ -232,10 +296,89 @@ function stopWatchdog() {
     chrome.alarms.clear(WATCHDOG_ALARM);
 }
 
+// === CREDIT AUTO RE-CHECK ===
+// Cron mỗi 5 phút: iterate `accCookies` + `lastOwnerCredit`, call monitor để update.
+// Lý do: user khong phai bam tay check tay nua, server tu chay theo cron.
+// Skip neu monitor unreachable (avoid spam log).
+const CREDIT_RECHECK_ALARM = 'creditRecheck';
+const CREDIT_RECHECK_INTERVAL_MIN = 5;
+const CREDIT_RECHECK_MAX_ACCS = 20; // moi tick chi check 20 acc gan day nhat de tranh qua tai monitor
+
+chrome.runtime.onInstalled.addListener(() => {
+    chrome.alarms.create(CREDIT_RECHECK_ALARM, {
+        delayInMinutes: 1,
+        periodInMinutes: CREDIT_RECHECK_INTERVAL_MIN
+    });
+    console.log('[CreditRecheck] alarm registered, every', CREDIT_RECHECK_INTERVAL_MIN, 'min');
+});
+
+// Đảm bảo alarm tồn tại sau khi service worker restart
+chrome.runtime.onStartup.addListener(() => {
+    chrome.alarms.get(CREDIT_RECHECK_ALARM, (a) => {
+        if (!a) {
+            chrome.alarms.create(CREDIT_RECHECK_ALARM, {
+                delayInMinutes: 1, periodInMinutes: CREDIT_RECHECK_INTERVAL_MIN
+            });
+        }
+    });
+});
+
+async function autoRecheckCredits() {
+    try {
+        const db = await chrome.storage.local.get(['accCookies', 'lastOwnerCredit', 'creditHistory']);
+        const accCookies = db.accCookies || {};
+        const lastOwnerCredit = db.lastOwnerCredit || {};
+        const creditHistory = db.creditHistory || [];
+
+        const emails = Object.keys(accCookies).slice(-CREDIT_RECHECK_MAX_ACCS);
+        if (emails.length === 0) {
+            console.log('[CreditRecheck] no accCookies yet, skip');
+            return;
+        }
+
+        let updated = 0;
+        for (const email of emails) {
+            try {
+                const r = await callCreditMonitor(accCookies[email], email);
+                if (r.credit == null) continue;
+                const prev = lastOwnerCredit[email] ?? null;
+                if (prev === r.credit) continue; // no change, dont push event
+
+                const ev = {
+                    ts: nowVN(),
+                    ownerEmail: email,
+                    accConEmail: null,
+                    prevCredit: prev,
+                    newCredit: r.credit,
+                    delta: prev != null ? r.credit - prev : null,
+                    isAutoRecheck: true,
+                    error: null
+                };
+                creditHistory.push(ev);
+                lastOwnerCredit[email] = r.credit;
+                updated++;
+                console.log(`[CreditRecheck] ${email}: ${prev} → ${r.credit}${ev.delta != null ? ' (Δ' + ev.delta + ')' : ''}`);
+            } catch (_) { /* monitor unreachable */ }
+        }
+
+        if (creditHistory.length > CREDIT_HISTORY_CAP) {
+            creditHistory.splice(0, creditHistory.length - CREDIT_HISTORY_CAP);
+        }
+        if (updated > 0) {
+            await chrome.storage.local.set({ lastOwnerCredit, creditHistory });
+            console.log(`[CreditRecheck] tick: ${updated}/${emails.length} acc updated`);
+        }
+    } catch (e) {
+        console.warn('[CreditRecheck] err:', e.message);
+    }
+}
+
 chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === WATCHDOG_ALARM) {
         console.log('[WATCHDOG] Quá 2 phút chưa xong! Tự động Skip lượt này...');
         skipIteration();
+    } else if (alarm.name === CREDIT_RECHECK_ALARM) {
+        autoRecheckCredits();
     }
 });
 
@@ -256,6 +399,39 @@ chrome.webNavigation.onCommitted.addListener((details) => {
         }).catch(err => console.log('CSP Bypass Inject Error:', err));
     }
 }, {url: [{hostContains: 'fotor.com'}]});
+
+// === VPS Proxy message handlers ===
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'getVpsConfig') {
+    globalThis.ProxyManager.getVpsConfig().then(cfg => sendResponse(cfg)).catch(() => sendResponse(null));
+    return true; // async
+  }
+  if (message.action === 'saveVpsConfig') {
+    globalThis.ProxyManager.saveVpsConfig(message.config || {})
+      .then(cfg => sendResponse({ ok: true, config: cfg }))
+      .catch(e => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (message.action === 'testVpsConnection') {
+    (async () => {
+      try {
+        const ping = await globalThis.ProxyManager.testConnection();
+        let statusReport = null;
+        try { statusReport = await globalThis.ProxyManager.getStatus(); } catch (_) {}
+        sendResponse({ ok: true, service: ping && ping.service, statusReport });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+  if (message.action === 'clearVpsProxy') {
+    globalThis.ProxyManager.clearProxy()
+      .then(() => sendResponse({ ok: true }))
+      .catch(e => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'startProcess') {
@@ -523,6 +699,36 @@ async function handleRegistrationDone(tabId, refLink = 'Không rõ') {
       // Map refLink của acc CON (link mà acc CON SỞ HỮU, để batch sau đến lượt)
       if (refLink && refLink.includes('fotor.com/referrer')) {
           linkToEmail[refLink] = accConEmail;
+      }
+      // === IMMEDIATE credit check cho acc CON vua reg ===
+      // De popup hien tai credit ngay tu acc DAU TIEN (khong cho chu rotate).
+      // Default credit cua acc moi reg = 5pt + (bonus referrer = 5pt neu co ref).
+      // Day vao creditHistory voi delta=null (no baseline).
+      if (accCookies[accConEmail]) {
+          try {
+              const firstChk = await callCreditMonitor(accCookies[accConEmail], accConEmail);
+              if (firstChk.credit != null) {
+                  const prev = lastOwnerCredit[accConEmail] ?? null;
+                  const ev = {
+                      ts: createdAt,
+                      ownerEmail: accConEmail,
+                      ownerLink: refLink || null,
+                      accConEmail,
+                      prevCredit: prev,
+                      newCredit: firstChk.credit,
+                      delta: prev != null ? firstChk.credit - prev : null,
+                      isFirstAcc: prev == null,
+                      error: null,
+                  };
+                  creditHistory.push(ev);
+                  lastOwnerCredit[accConEmail] = firstChk.credit;
+                  console.log(`[CreditTracker] First check acc CON ${accConEmail}: credit=${firstChk.credit}${prev != null ? ` (Δ${ev.delta})` : ' (baseline)'}`);
+              } else if (firstChk.error) {
+                  console.log(`[CreditTracker] First check err for ${accConEmail}: ${firstChk.error}`);
+              }
+          } catch (e) {
+              console.log(`[CreditTracker] First check throw for ${accConEmail}: ${e.message}`);
+          }
       }
   }
 

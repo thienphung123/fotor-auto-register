@@ -13,7 +13,10 @@
     "alarms",
     "notifications",
     "nativeMessaging",
-    "cookies"
+    "cookies",
+    "proxy",
+    "webRequest",
+    "webRequestAuthProvider"
   ],
   "host_permissions": [
     "*://*.fotor.com/*",
@@ -21,7 +24,9 @@
     "*://*.temp-mailo.org/*",
     "https://api.telegram.org/*",
     "http://127.0.0.1/*",
-    "http://localhost/*"
+    "http://localhost/*",
+    "https://*/*",
+    "http://*/*"
   ],
   "action": {
     "default_popup": "popup.html",

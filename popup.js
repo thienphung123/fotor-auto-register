@@ -89,6 +89,83 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(updateUI, 800);
   });
 
+  // === VPS Proxy config ===
+  function setVpsStatus(text, color) {
+    const el = document.getElementById('vpsStatus');
+    if (el) { el.innerHTML = text; el.style.color = color || '#666'; }
+  }
+
+  // Restore VPS config
+  chrome.runtime.sendMessage({ action: 'getVpsConfig' }, (cfg) => {
+    if (cfg) {
+      document.getElementById('vpsHost').value = cfg.host || '';
+      document.getElementById('vpsApiToken').value = cfg.apiToken || '';
+      document.getElementById('vpsProxyUser').value = cfg.proxyUser || '';
+      document.getElementById('vpsProxyPass').value = cfg.proxyPass || '';
+      document.getElementById('vpsEnabled').checked = !!cfg.enabled;
+      if (cfg.enabled && cfg.host && cfg.apiToken) {
+        setVpsStatus('✅ Đang bật - VPS: <code>' + cfg.host + '</code>', '#27ae60');
+      }
+    }
+  });
+
+  document.getElementById('vpsSaveBtn').addEventListener('click', () => {
+    const cfg = {
+      host: document.getElementById('vpsHost').value.trim(),
+      apiToken: document.getElementById('vpsApiToken').value.trim(),
+      proxyUser: document.getElementById('vpsProxyUser').value.trim(),
+      proxyPass: document.getElementById('vpsProxyPass').value.trim(),
+      enabled: document.getElementById('vpsEnabled').checked
+    };
+    chrome.runtime.sendMessage({ action: 'saveVpsConfig', config: cfg }, (resp) => {
+      if (chrome.runtime.lastError) {
+        setVpsStatus('❌ Lưu fail: ' + chrome.runtime.lastError.message, '#e74c3c');
+        return;
+      }
+      const missing = [];
+      if (!cfg.host) missing.push('host');
+      if (!cfg.apiToken) missing.push('token');
+      if (!cfg.proxyUser) missing.push('proxyUser');
+      if (!cfg.proxyPass) missing.push('proxyPass');
+      if (missing.length > 0) {
+        setVpsStatus('⚠️ Đã lưu nhưng thiếu: ' + missing.join(', '), '#e67e22');
+      } else {
+        setVpsStatus('💾 Đã lưu lúc ' + new Date().toLocaleTimeString('vi-VN'), '#27ae60');
+      }
+    });
+  });
+
+  document.getElementById('vpsTestBtn').addEventListener('click', () => {
+    setVpsStatus('⏳ Đang test kết nối VPS...', '#9b59b6');
+    chrome.runtime.sendMessage({ action: 'testVpsConnection' }, (resp) => {
+      if (chrome.runtime.lastError) {
+        setVpsStatus('❌ ' + chrome.runtime.lastError.message, '#e74c3c');
+        return;
+      }
+      if (resp && resp.ok) {
+        let html = '✅ Kết nối OK: ' + (resp.service || 'fotor-vps-api');
+        if (resp.statusReport && resp.statusReport.slots) {
+          html += '<br>' + resp.statusReport.slots.map(s =>
+            `Slot ${s.slot}: ${s.status || '?'} | ${s.city || s.region || s.country || '?'} | ${s.ip || '?'}`
+          ).join('<br>');
+        }
+        setVpsStatus(html, '#27ae60');
+      } else {
+        setVpsStatus('❌ Test fail: ' + (resp && resp.error || 'unknown'), '#e74c3c');
+      }
+    });
+  });
+
+  document.getElementById('vpsClearProxyBtn').addEventListener('click', () => {
+    chrome.runtime.sendMessage({ action: 'clearVpsProxy' }, (resp) => {
+      if (resp && resp.ok) {
+        setVpsStatus('⏹️ Đã clear proxy (direct mode). Chrome dùng IP thật của PC.', '#7f8c8d');
+      } else {
+        setVpsStatus('❌ Clear fail: ' + (resp && resp.error || 'unknown'), '#e74c3c');
+      }
+    });
+  });
+
   // === Telegram config ===
   // Restore
   chrome.storage.local.get(['telegramConfig'], (data) => {

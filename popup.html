@@ -33,9 +33,32 @@
   <button id="startBtn">Bắt đầu Đăng ký</button>
   <button id="resumeBtn" style="display:none; background-color:#27ae60;">▶️ Tiếp tục (đã đổi IP)</button>
   <button id="stopBtn">Dừng lại</button>
-  <button id="rotateVpnBtn" style="background-color:#9b59b6;">🔄 Đổi IP ngay (OpenVPN)</button>
+  <button id="rotateVpnBtn" style="background-color:#9b59b6;">🔄 Đổi IP ngay (VPS Proxy)</button>
 
   <div id="vpnStatus" style="font-size:11px; color:#9b59b6; margin:4px 0; min-height:14px; text-align:center;"></div>
+
+  <details style="margin-top:6px; border:1px solid #9b59b6; border-radius:4px; padding:8px; background:#faf5fb;">
+    <summary style="cursor:pointer; font-weight:bold; font-size:12px; color:#9b59b6;">🌐 VPS Proxy Config (rotate IP qua VPS - khong anh huong PC)</summary>
+    <div style="margin-top:8px;">
+      <label style="font-size:11px;">VPS Host (IP hoac domain):</label>
+      <input type="text" id="vpsHost" placeholder="34.59.202.214" style="width:100%; padding:6px; margin-bottom:6px; border:1px solid #ccc; border-radius:4px; box-sizing:border-box; font-size:11px;">
+      <label style="font-size:11px;">API Token:</label>
+      <input type="password" id="vpsApiToken" placeholder="48 hex chars" style="width:100%; padding:6px; margin-bottom:6px; border:1px solid #ccc; border-radius:4px; box-sizing:border-box; font-size:11px;">
+      <label style="font-size:11px;">Proxy User:</label>
+      <input type="text" id="vpsProxyUser" placeholder="fotor_xxxxxxxx" style="width:100%; padding:6px; margin-bottom:6px; border:1px solid #ccc; border-radius:4px; box-sizing:border-box; font-size:11px;">
+      <label style="font-size:11px;">Proxy Pass:</label>
+      <input type="password" id="vpsProxyPass" placeholder="32 hex chars" style="width:100%; padding:6px; margin-bottom:6px; border:1px solid #ccc; border-radius:4px; box-sizing:border-box; font-size:11px;">
+      <label style="font-size:11px;">
+        <input type="checkbox" id="vpsEnabled" style="vertical-align:middle;">
+        Bat VPS Proxy mode (uu tien hon native helper)
+      </label>
+      <button id="vpsSaveBtn" style="margin-top:6px; padding:6px; background-color:#9b59b6; font-size:12px;">💾 Luu cau hinh</button>
+      <button id="vpsTestBtn" style="margin-top:4px; padding:6px; background-color:#7f8c8d; font-size:12px;">🔍 Test connection</button>
+      <button id="vpsClearProxyBtn" style="margin-top:4px; padding:6px; background-color:#95a5a6; font-size:12px;">⏹️ Clear proxy (direct mode)</button>
+      <div id="vpsStatus" style="margin-top:6px; font-size:11px; color:#666; word-wrap:break-word;"></div>
+    </div>
+  </details>
+
   <div id="refUsageInfo" style="font-size:11px; color:#e67e22; margin:6px 0; min-height:14px;"></div>
   <div id="creditInfo" style="font-size:11px; color:#16a085; margin:6px 0; min-height:14px;"></div>
   <div id="status">Đang chờ...</div>
