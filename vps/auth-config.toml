@@ -6,7 +6,6 @@ roles = [
     "GET /v1/openvpn/status",
     "PUT /v1/openvpn/status",
     "GET /v1/openvpn/settings",
-    "PUT /v1/openvpn/settings",
     "GET /v1/publicip/ip",
     "GET /v1/vpn/status",
     "PUT /v1/vpn/status",

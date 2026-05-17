@@ -91,7 +91,7 @@ async function waitTunnelUp(slot, timeoutMs = 30000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
         try {
-            const r = await gluetunRequest(slot, { path: '/v1/openvpn/status', timeout: 3000 });
+            const r = await gluetunRequest(slot, { path: '/v1/vpn/status', timeout: 3000 });
             if (r.status === 200 && r.body && r.body.status === 'running') return true;
         } catch (_) {}
         await new Promise(r => setTimeout(r, 1000));
@@ -121,24 +121,33 @@ async function rotateSlot(slotIdx, requestedCountry) {
 
     console.log(`[rotate] slot ${slotIdx}: -> ${country}`);
 
-    // Step 1: update settings
+    // Step 1: PUT /v1/vpn/settings (new path, /v1/openvpn/settings deprecated)
+    // Body shape: { provider: { server_selection: { countries: [...] } } }
     const setRes = await gluetunRequest(slot, {
         method: 'PUT',
-        path: '/v1/openvpn/settings',
-        body: { server_countries: [country] }
+        path: '/v1/vpn/settings',
+        body: { provider: { serverSelection: { countries: [country] } } }
     });
     if (setRes.status !== 200 && setRes.status !== 204) {
-        throw new Error(`settings update fail (${setRes.status}): ${setRes.raw}`);
+        // Fallback try snake_case
+        const retry = await gluetunRequest(slot, {
+            method: 'PUT',
+            path: '/v1/vpn/settings',
+            body: { provider: { server_selection: { countries: [country] } } }
+        });
+        if (retry.status !== 200 && retry.status !== 204) {
+            throw new Error(`settings update fail (${setRes.status}/${retry.status}): ${setRes.raw}`);
+        }
     }
 
-    // Step 2: stop -> start OpenVPN to apply new settings
-    await gluetunRequest(slot, { method: 'PUT', path: '/v1/openvpn/status', body: { status: 'stopped' } });
+    // Step 2: stop -> start VPN to apply new settings
+    await gluetunRequest(slot, { method: 'PUT', path: '/v1/vpn/status', body: { status: 'stopped' } });
     await new Promise(r => setTimeout(r, 1500));
-    await gluetunRequest(slot, { method: 'PUT', path: '/v1/openvpn/status', body: { status: 'running' } });
+    await gluetunRequest(slot, { method: 'PUT', path: '/v1/vpn/status', body: { status: 'running' } });
 
-    // Step 3: wait tunnel back up
-    const ok = await waitTunnelUp(slot, 25000);
-    if (!ok) throw new Error('tunnel did not come up within 25s');
+    // Step 3: wait tunnel back up (poll via /v1/vpn/status)
+    const ok = await waitTunnelUp(slot, 30000);
+    if (!ok) throw new Error('tunnel did not come up within 30s');
 
     // Step 4: fetch new IP
     await new Promise(r => setTimeout(r, 2000));
@@ -195,7 +204,7 @@ async function handleRequest(req, res) {
             const results = await Promise.all(SLOTS.map(async (slot) => {
                 try {
                     const [statusRes, ipRes] = await Promise.all([
-                        gluetunRequest(slot, { path: '/v1/openvpn/status', timeout: 3000 }),
+                        gluetunRequest(slot, { path: '/v1/vpn/status', timeout: 3000 }),
                         gluetunRequest(slot, { path: '/v1/publicip/ip', timeout: 3000 }).catch(() => ({ body: null }))
                     ]);
                     return {
@@ -203,7 +212,8 @@ async function handleRequest(req, res) {
                         status: statusRes.body && statusRes.body.status,
                         country: slotState[slot.index - 1].currentCountry,
                         ip: ipRes.body && ipRes.body.public_ip,
-                        region: ipRes.body && ipRes.body.region
+                        region: ipRes.body && ipRes.body.region,
+                        city: ipRes.body && ipRes.body.city
                     };
                 } catch (e) {
                     return { slot: slot.index, error: e.message };
@@ -235,7 +245,7 @@ async function handleRequest(req, res) {
             if (!slotIdx || slotIdx < 1 || slotIdx > SLOTS.length) {
                 return jsonReply(res, 400, { ok: false, error: 'invalid slot' });
             }
-            await gluetunRequest(SLOTS[slotIdx - 1], { method: 'PUT', path: '/v1/openvpn/status', body: { status: 'stopped' } });
+            await gluetunRequest(SLOTS[slotIdx - 1], { method: 'PUT', path: '/v1/vpn/status', body: { status: 'stopped' } });
             return jsonReply(res, 200, { ok: true, slot: slotIdx, status: 'stopped' });
         }
 
