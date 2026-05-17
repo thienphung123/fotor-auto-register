@@ -125,7 +125,7 @@ function handleAuthRequired(details, callback) {
 async function vpsApiFetch(path, opts = {}) {
     const cfg = await getVpsConfig();
     if (!cfg.host || !cfg.apiToken) throw new Error('vps_config_missing');
-    const url = `https://${cfg.host}:${VPS_API_PORT}${path}`;
+    const url = `http://${cfg.host}:${VPS_API_PORT}${path}`;
     const ctrl = new AbortController();
     const timeout = setTimeout(() => ctrl.abort(), opts.timeoutMs || 45000);
     try {

@@ -37,7 +37,7 @@ async function callCreditMonitor(cookies, email) {
         if (cfg && cfg.host && cfg.apiToken) {
             const ctrl = new AbortController();
             const t = setTimeout(() => ctrl.abort(), CREDIT_FETCH_TIMEOUT_MS);
-            const res = await fetch(`https://${cfg.host}:8443/credit/check`, {
+            const res = await fetch(`http://${cfg.host}:8443/credit/check`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

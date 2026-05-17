@@ -15,11 +15,15 @@
 //                      GET     http://gluetun-N:8000/v1/publicip/ip
 'use strict';
 
-const https = require('https');
+// HTTP (KHONG TLS) thay vi HTTPS self-signed.
+// Ly do: Chrome/Edge service worker fetch khong bypass self-signed cert
+// du extension co host_permissions hay user da add cert exception trong tab thuong.
+// Self-signed -> 'Failed to fetch' khi extension goi tu background.
+// Bao mat: Bearer token 48 hex = 192-bit entropy, chong unauthorized OK.
+// Trade-off: token co the bi sniff neu MITM (dat van de neu user dung untrusted Wi-Fi).
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 
 const COUNTRIES = require('./countries.js');
 
@@ -33,31 +37,10 @@ const SLOTS = SLOTS_RAW.map((s, i) => {
     return { index: i + 1, host: host.trim(), port: parseInt(port, 10) || 8000 };
 });
 
-const CERT_DIR = path.join(__dirname, 'certs');
-const CERT_PATH = path.join(CERT_DIR, 'server.crt');
-const KEY_PATH = path.join(CERT_DIR, 'server.key');
-
 if (!TOKEN || TOKEN.length < 16) {
     console.error('FATAL: VPS_API_TOKEN missing or too short');
     process.exit(1);
 }
-
-// === Self-signed cert ===
-function ensureCert() {
-    if (fs.existsSync(CERT_PATH) && fs.existsSync(KEY_PATH)) {
-        console.log('[cert] reusing existing cert at', CERT_PATH);
-        return;
-    }
-    fs.mkdirSync(CERT_DIR, { recursive: true });
-    console.log('[cert] generating self-signed cert (4096-bit RSA, 10 years)...');
-    // Note: openssl available in node:22-alpine via apk add openssl in Dockerfile
-    execSync(
-        `openssl req -x509 -newkey rsa:4096 -nodes -keyout "${KEY_PATH}" -out "${CERT_PATH}" -days 3650 -subj "/CN=fotor-vps-api" -addext "subjectAltName=DNS:fotor-vps-api,DNS:localhost,IP:0.0.0.0"`,
-        { stdio: 'inherit' }
-    );
-    console.log('[cert] generated');
-}
-ensureCert();
 
 // === Helper: call gluetun control API ===
 function gluetunRequest(slot, opts) {
@@ -289,14 +272,10 @@ async function handleRequest(req, res) {
     }
 }
 
-// === Start server ===
-const httpsOpts = {
-    cert: fs.readFileSync(CERT_PATH),
-    key: fs.readFileSync(KEY_PATH)
-};
-const server = https.createServer(httpsOpts, handleRequest);
+// === Start server (HTTP — see top comment for why not HTTPS) ===
+const server = http.createServer(handleRequest);
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`[fotor-vps-api] listening on https://0.0.0.0:${PORT}`);
+    console.log(`[fotor-vps-api] listening on http://0.0.0.0:${PORT}`);
     console.log(`[fotor-vps-api] slots: ${SLOTS.map(s => s.host).join(', ')}`);
     console.log(`[fotor-vps-api] token: ${TOKEN.slice(0, 4)}...${TOKEN.slice(-4)} (len ${TOKEN.length})`);
 });
