@@ -1,0 +1,16 @@
+# Gluetun control API auth config
+# Cho phep public access (no auth) cac route ma fotor-api can goi.
+# An toan vi control API chi expose noi bo Docker network (port 8000 khong publish ra host).
+roles = [
+  {name = "public", routes = [
+    "GET /v1/openvpn/status",
+    "PUT /v1/openvpn/status",
+    "GET /v1/openvpn/settings",
+    "PUT /v1/openvpn/settings",
+    "GET /v1/publicip/ip",
+    "GET /v1/vpn/status",
+    "PUT /v1/vpn/status",
+    "GET /v1/vpn/settings",
+    "PUT /v1/vpn/settings"
+  ], auth = "none"}
+]

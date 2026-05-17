@@ -32,6 +32,8 @@ services:
       - HTTP_CONTROL_SERVER_LOG=off
       - HEALTH_VPN_DURATION_INITIAL=60s
       - TZ=Asia/Ho_Chi_Minh
+    volumes:
+      - ./auth-config.toml:/gluetun/auth/config.toml:ro
     ports:
       - "1080:8888"  # HTTP proxy public
       # control API 8000 chi expose noi bo Docker network
@@ -60,6 +62,8 @@ services:
       - HTTP_CONTROL_SERVER_LOG=off
       - HEALTH_VPN_DURATION_INITIAL=60s
       - TZ=Asia/Ho_Chi_Minh
+    volumes:
+      - ./auth-config.toml:/gluetun/auth/config.toml:ro
     ports:
       - "1081:8888"
     networks:
@@ -87,6 +91,8 @@ services:
       - HTTP_CONTROL_SERVER_LOG=off
       - HEALTH_VPN_DURATION_INITIAL=60s
       - TZ=Asia/Ho_Chi_Minh
+    volumes:
+      - ./auth-config.toml:/gluetun/auth/config.toml:ro
     ports:
       - "1082:8888"
     networks:
