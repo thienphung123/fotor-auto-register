@@ -1,0 +1,123 @@
+# Fotor VPN Helper - VPS Proxy Stack
+# 3 slot gluetun (Surfshark OpenVPN) + 1 API rotate orchestrator
+#
+# Setup:
+#   1. Sao chep .env.example sang .env va dien Surfshark creds + random tokens
+#   2. docker compose up -d
+#   3. docker compose logs -f api  # xem token + creds in ra
+#
+# Healthcheck: moi gluetun co healthcheck built-in, doi ~60s sau startup
+# Lan dau de tunnel up.
+
+services:
+  # ===== 3 slot gluetun (Surfshark OpenVPN) =====
+  gluetun-1:
+    image: qmcgaw/gluetun:latest
+    container_name: fotor-gluetun-1
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=surfshark
+      - VPN_TYPE=openvpn
+      - OPENVPN_USER=${SURFSHARK_USER}
+      - OPENVPN_PASSWORD=${SURFSHARK_PASS}
+      - SERVER_COUNTRIES=Netherlands
+      - HTTPPROXY=on
+      - HTTPPROXY_USER=${PROXY_USER}
+      - HTTPPROXY_PASSWORD=${PROXY_PASS}
+      - HTTPPROXY_LISTENING_ADDRESS=:8888
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - HEALTH_VPN_DURATION_INITIAL=60s
+      - TZ=Asia/Ho_Chi_Minh
+    ports:
+      - "1080:8888"  # HTTP proxy public
+      # control API 8000 chi expose noi bo Docker network
+    networks:
+      - fotor-net
+    restart: unless-stopped
+
+  gluetun-2:
+    image: qmcgaw/gluetun:latest
+    container_name: fotor-gluetun-2
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=surfshark
+      - VPN_TYPE=openvpn
+      - OPENVPN_USER=${SURFSHARK_USER}
+      - OPENVPN_PASSWORD=${SURFSHARK_PASS}
+      - SERVER_COUNTRIES=Germany
+      - HTTPPROXY=on
+      - HTTPPROXY_USER=${PROXY_USER}
+      - HTTPPROXY_PASSWORD=${PROXY_PASS}
+      - HTTPPROXY_LISTENING_ADDRESS=:8888
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - HEALTH_VPN_DURATION_INITIAL=60s
+      - TZ=Asia/Ho_Chi_Minh
+    ports:
+      - "1081:8888"
+    networks:
+      - fotor-net
+    restart: unless-stopped
+
+  gluetun-3:
+    image: qmcgaw/gluetun:latest
+    container_name: fotor-gluetun-3
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=surfshark
+      - VPN_TYPE=openvpn
+      - OPENVPN_USER=${SURFSHARK_USER}
+      - OPENVPN_PASSWORD=${SURFSHARK_PASS}
+      - SERVER_COUNTRIES=France
+      - HTTPPROXY=on
+      - HTTPPROXY_USER=${PROXY_USER}
+      - HTTPPROXY_PASSWORD=${PROXY_PASS}
+      - HTTPPROXY_LISTENING_ADDRESS=:8888
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - HEALTH_VPN_DURATION_INITIAL=60s
+      - TZ=Asia/Ho_Chi_Minh
+    ports:
+      - "1082:8888"
+    networks:
+      - fotor-net
+    restart: unless-stopped
+
+  # ===== API orchestrator =====
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: fotor-api
+    environment:
+      - VPS_API_TOKEN=${VPS_API_TOKEN}
+      - PROXY_USER=${PROXY_USER}
+      - PROXY_PASS=${PROXY_PASS}
+      - PORT=8443
+      - SLOTS=gluetun-1:8000,gluetun-2:8000,gluetun-3:8000
+      - TZ=Asia/Ho_Chi_Minh
+    volumes:
+      - ./api/certs:/app/certs  # persist self-signed cert
+    ports:
+      - "8443:8443"
+    networks:
+      - fotor-net
+    depends_on:
+      - gluetun-1
+      - gluetun-2
+      - gluetun-3
+    restart: unless-stopped
+
+networks:
+  fotor-net:
+    driver: bridge

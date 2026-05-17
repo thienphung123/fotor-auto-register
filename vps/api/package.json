@@ -1,0 +1,13 @@
+{
+  "name": "fotor-vps-api",
+  "version": "1.0.0",
+  "description": "Rotate orchestrator API cho gluetun slots",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
